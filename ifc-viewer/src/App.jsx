@@ -1,87 +1,52 @@
-import { useEffect, useRef } from "react";
-import * as THREE from "three";
-import * as OBC from "@thatopen/components";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import React, { useEffect, useRef } from 'react'
+import * as OBC from "@thatopen/components"
+import * as WEBIFC from "web-ifc"
 
-export default function App() {
-  const containerRef = useRef();
+function App() {
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const containerRef = useRef(null)
 
-    const components = new OBC.Components();
+    useEffect(() => {
+        const components = new OBC.Components()
+        const worlds = components.get(OBC.Worlds)
 
-    // Scene
-    components.scene = new OBC.SimpleScene(components);
+        const world = worlds.create()
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(
-      60,
-      container.clientWidth / container.clientHeight,
-      0.1,
-      1000
-    );
-    camera.position.set(10, 10, 10);
-    components.camera = new OBC.SimpleCamera(components, camera);
+        world.scene = new OBC.SimpleScene(components)
+        world.renderer = new OBC.SimpleRenderer(components, containerRef.current)
+        world.camera = new OBC.SimpleCamera(components)
 
-    // Renderer — pass container at construction (important!)
-    components.renderer = new OBC.SimpleRenderer(components, container);
+        components.init()
 
-    // Initialize ThatOpen components
-    components.init();
+        world.scene.setup()
 
-    // Orbit controls
-    const controls = new OrbitControls(camera, components.renderer.domElement);
-    controls.enableDamping = true;
-    controls.update();
+        const loadIfc = async () => {
+            const fragmentIfcLoader = components.get(OBC.IfcLoader)
+            await fragmentIfcLoader.setup()
 
-    // IFC Loader
-    const fragmentIfcLoader = components.get(OBC.FragmentIfcLoader);
-    if (fragmentIfcLoader) {
-      fragmentIfcLoader.settings.wasm = {
-        path: "https://unpkg.com/web-ifc@0.0.44/",
-      };
-    }
+            fragmentIfcLoader.settings.excludedCategories.add(WEBIFC.IFCSPACE)
 
-    // File input
-    const input = document.createElement("input");
-    input.type = "file";
-    input.style.position = "absolute";
-    input.style.zIndex = "10";
+            fragmentIfcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true
 
-    input.onchange = async (event) => {
-      const file = event.target.files[0];
-      if (!file || !fragmentIfcLoader) return;
+            const file = await fetch(`${process.env.PUBLIC_URL}/ifc1.ifc`)
+            const data = await file.arrayBuffer()
+            const buffer = new Uint8Array(data)
+            const model = await fragmentIfcLoader.load(buffer)
+            model.name = "example"
+            world.scene.three.add(model)
+            console.log("loaded")
+        }
 
-      try {
-        const buffer = await file.arrayBuffer();
-        const model = await fragmentIfcLoader.load(buffer);
+        loadIfc()
 
-        components.scene.add(model);
-        components.camera.fitTo(model);
-        controls.update();
-      } catch (err) {
-        console.error("Error loading IFC model:", err);
-      }
-    };
+        return () => {
+            world.renderer?.dispose()
+        }
 
-    document.body.appendChild(input);
+    }, [])
 
-    // Animate loop
-    const animate = () => {
-      requestAnimationFrame(animate);
-      controls.update();
-      components.renderer.render();
-    };
-    animate();
+    return <div ref={containerRef} style={{ width: '100vw', height: '100vh' }} />
 
-    // Cleanup
-    return () => {
-      if (container.firstChild) container.removeChild(container.firstChild);
-      document.body.removeChild(input);
-    };
-  }, []);
-
-  return <div ref={containerRef} style={{ width: "100vw", height: "100vh" }} />;
 }
+
+export default App
