@@ -1,68 +1,61 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import { IFCLoader } from "web-ifc-three/IFCLoader";
+import * as OBC from "@thatopen/components";
 
-function App() {
-  const mountRef = useRef();
+export default function App() {
+  const containerRef = useRef();
 
   useEffect(() => {
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf0f0f0);
+    const container = containerRef.current;
+    const components = new OBC.Components();
 
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
-    camera.position.set(10, 10, 10);
+    // Setup ThatOpen scene and camera
+    components.scene = new OBC.SimpleScene(components);
+    components.camera = new OBC.SimpleCamera(components, new THREE.PerspectiveCamera());
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    mountRef.current.appendChild(renderer.domElement);
+    // Setup renderer (DOM element container)
+    components.renderer = new OBC.SimpleRenderer(components, container);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+    // Wait for init to complete before using loaders
+    components.init().then(() => {
+      const fragmentIfcLoader = components.get(OBC.FragmentIfcLoader);
 
-    const light = new THREE.DirectionalLight(0xffffff, 1);
-    light.position.set(20, 20, 20);
-    scene.add(light);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+      fragmentIfcLoader.settings.wasm = {
+        path: "https://unpkg.com/web-ifc@0.0.44/"
+      };
 
-    const ifcLoader = new IFCLoader();
-    ifcLoader.ifcManager.setWasmPath(
-      "https://unpkg.com/web-ifc@0.0.44/"
-    );
+      // File input
+      const input = document.createElement("input");
+      input.type = "file";
+      input.style.position = "absolute";
+      input.style.zIndex = "10";
 
-    let model;
+      input.onchange = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
 
-    const input = document.createElement("input");
-    input.type = "file";
-    input.style.position = "absolute";
-    input.style.zIndex = "1";
-    input.onchange = async (event) => {
-      const file = event.target.files[0];
-      const url = URL.createObjectURL(file);
-      model = await ifcLoader.loadAsync(url);
-      scene.add(model);
-    };
+        const buffer = await file.arrayBuffer();
+        const model = await fragmentIfcLoader.load(buffer);
 
-    document.body.appendChild(input);
+        components.scene.add(model);
+        components.camera.fitTo(model); // auto-frame camera
+      };
 
-    const animate = () => {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    animate();
+      document.body.appendChild(input);
 
+      // Animate
+      const animate = () => {
+        requestAnimationFrame(animate);
+        components.renderer.render();
+      };
+      animate();
+    });
+
+    // Cleanup
     return () => {
-      mountRef.current.removeChild(renderer.domElement);
+      if (container.firstChild) container.removeChild(container.firstChild);
     };
   }, []);
 
-  return <div ref={mountRef} />;
+  return <div ref={containerRef} style={{ width: "100vw", height: "100vh" }} />;
 }
-
-export default App;
