@@ -42,9 +42,9 @@ function App() {
 
       await ifcLoader.setup({
         autoSetWasm: false,
-        wasm: {
-          path: "https://unpkg.com/web-ifc@0.0.74/",
-          absolute: true,
+          wasm: {
+          path: "/wasm/", // folder inside public
+          absolute: false,
         },
       });
 
