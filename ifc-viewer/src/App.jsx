@@ -1,52 +1,183 @@
-import React, { useEffect, useRef } from 'react'
-import * as OBC from "@thatopen/components"
-import * as WEBIFC from "web-ifc"
+// App.jsx
+import { useEffect, useRef } from "react";
+import Stats from "stats.js";
+//import * as OBC from "@thatopen/components"
+import * as BUI from "@thatopen/ui";
+import { Components, Worlds, SimpleScene, OrthoPerspectiveCamera, SimpleRenderer, Grids, IfcLoader, FragmentsManager } from "@thatopen/components";
+import { Camera } from "three";
+
 
 function App() {
+  const containerRef = useRef(null);
+  const panelRef = useRef(null);
+  const fragmentsRef = useRef(null);
+  const ifcLoaderRef = useRef(null);
+  const worldRef = useRef(null);
 
-    const containerRef = useRef(null)
+  useEffect(() => {
+    const init = async () => {
+      // Initialize components
+      const components = new Components();
+      const worlds = components.get(Worlds);
 
-    useEffect(() => {
-        const components = new OBC.Components()
-        const worlds = components.get(OBC.Worlds)
+      const world = worlds.create(SimpleScene, OrthoPerspectiveCamera, SimpleRenderer);
 
-        const world = worlds.create()
+      world.scene = new SimpleScene(components);
+      world.renderer = new SimpleRenderer(components, containerRef.current);
+      world.camera = new OrthoPerspectiveCamera(components);
 
-        world.scene = new OBC.SimpleScene(components)
-        world.renderer = new OBC.SimpleRenderer(components, containerRef.current)
-        world.camera = new OBC.SimpleCamera(components)
+      world.scene.setup();
+      components.init();
+      await world.camera.controls.setLookAt(10,10,10,0,0,0);
 
-        components.init()
+      components.get(Grids).create(world);
 
-        world.scene.setup()
+      // IFC Loader
+      const ifcLoader = components.get(IfcLoader);
+      ifcLoaderRef.current = ifcLoader;
 
-        const loadIfc = async () => {
-            const fragmentIfcLoader = components.get(OBC.IfcLoader)
-            await fragmentIfcLoader.setup()
+      ifcLoader.onIfcImporterInitialized.add((importer) => {
+        console.log(importer.classes);
+      });
 
-            fragmentIfcLoader.settings.excludedCategories.add(WEBIFC.IFCSPACE)
+      await ifcLoader.setup({
+        autoSetWasm: false,
+        wasm: {
+          path: "https://unpkg.com/web-ifc@0.0.74/",
+          absolute: true,
+        },
+      });
 
-            fragmentIfcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true
+      // Fragments Manager
+      const githubUrl =
+        "https://thatopen.github.io/engine_fragment/resources/worker.mjs";
+      const fetchedUrl = await fetch(githubUrl);
+      const workerBlob = await fetchedUrl.blob();
+      const workerFile = new File([workerBlob], "worker.mjs", {
+        type: "text/javascript",
+      });
+      const workerUrl = URL.createObjectURL(workerFile);
 
-            const file = await fetch(`${process.env.PUBLIC_URL}/ifc1.ifc`)
-            const data = await file.arrayBuffer()
-            const buffer = new Uint8Array(data)
-            const model = await fragmentIfcLoader.load(buffer)
-            model.name = "example"
-            world.scene.three.add(model)
-            console.log("loaded")
+      const fragments = components.get(FragmentsManager);
+      fragmentsRef.current = fragments;
+      fragments.init(workerUrl);
+
+      world.camera.controls.addEventListener("update", () =>
+        fragments.core.update()
+      );
+
+      fragments.list.onItemSet.add(({ value: model }) => {
+        model.useCamera(world.camera.three);
+        world.scene.three.add(model.object);
+        fragments.core.update(true);
+      });
+
+      fragments.core.models.materials.list.onItemSet.add(({ value: material }) => {
+        if (!("isLodMaterial" in material && material.isLodMaterial)) {
+          material.polygonOffset = true;
+          material.polygonOffsetUnits = 1;
+          material.polygonOffsetFactor = Math.random();
+        }
+      });
+
+      // Initialize UI
+      BUI.Manager.init();
+
+      const loadIfc = async (path) => {
+        const file = await fetch(path);
+        const data = await file.arrayBuffer();
+        const buffer = new Uint8Array(data);
+        await ifcLoader.load(buffer, false, "example", {
+          processData: {
+            progressCallback: (progress) => console.log(progress),
+          },
+        });
+      };
+
+      const downloadFragments = async () => {
+        const [model] = fragments.list.values();
+        if (!model) return;
+        const fragsBuffer = await model.getBuffer(false);
+        const file = new File([fragsBuffer], "school_str.frag");
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(file);
+        link.download = file.name;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      };
+
+      // Create UI panel
+      const [panel, updatePanel] = BUI.Component.create((_) => {
+        let downloadBtn;
+        if (fragments.list.size > 0) {
+          downloadBtn = BUI.html`
+            <bim-button label="Download Fragments" @click=${downloadFragments}></bim-button>
+          `;
         }
 
-        loadIfc()
+        let loadBtn;
+        if (fragments.list.size === 0) {
+          const onLoadIfc = async ({ target }) => {
+            target.label = "Conversion in progress...";
+            target.loading = true;
+            await loadIfc(
+              "https://thatopen.github.io/engine_components/resources/ifc/school_str.ifc"
+            );
+            target.loading = false;
+            target.label = "Load IFC";
+          };
 
-        return () => {
-            world.renderer?.dispose()
+          loadBtn = BUI.html`
+            <bim-button label="Load IFC" @click=${onLoadIfc}></bim-button>
+            <bim-label>Open the console to see the progress!</bim-label>
+          `;
         }
 
-    }, [])
+        return BUI.html`
+          <bim-panel active label="IfcLoader Tutorial" class="options-menu">
+            <bim-panel-section label="Controls">
+              ${loadBtn}
+              ${downloadBtn}
+            </bim-panel-section>
+          </bim-panel>
+        `;
+      }, {});
+      panelRef.current = panel;
+      document.body.append(panel);
 
-    return <div ref={containerRef} style={{ width: '100vw', height: '100vh' }} />
+      fragments.list.onItemSet.add(() => updatePanel());
 
+      // Phone toggle button
+      const button = BUI.Component.create(() => {
+        return BUI.html`
+          <bim-button class="phone-menu-toggler" icon="solar:settings-bold"
+            @click="${() => {
+              if (panel.classList.contains("options-menu-visible")) {
+                panel.classList.remove("options-menu-visible");
+              } else {
+                panel.classList.add("options-menu-visible");
+              }
+            }}">
+          </bim-button>
+        `;
+      });
+      document.body.append(button);
+
+      // Stats
+      const stats = new Stats();
+      stats.showPanel(2);
+      document.body.append(stats.dom);
+      stats.dom.style.left = "0px";
+      stats.dom.style.zIndex = "unset";
+
+      world.renderer.onBeforeUpdate.add(() => stats.begin());
+      world.renderer.onAfterUpdate.add(() => stats.end());
+    };
+
+    init();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: "100vw", height: "100vh" }} />;
 }
 
-export default App
+export default App;
