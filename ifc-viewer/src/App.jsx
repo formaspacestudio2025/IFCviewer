@@ -15,7 +15,7 @@ function App() {
 
   useEffect(() => {
     const init = async () => {
-      if (worldRef.current) return; // Already initialized, prevent duplicates
+      if (worldRef.current) return; // Prevent duplicates
 
       // Initialize components
       const components = new Components();
@@ -32,7 +32,7 @@ function App() {
       components.init();
       await world.camera.controls.setLookAt(10, 10, 10, 0, 0, 0);
 
-      // Only create grid once
+      // Grid (only once)
       if (!worldRef.current.gridCreated) {
         components.get(Grids).create(world);
         worldRef.current.gridCreated = true;
@@ -81,11 +81,19 @@ function App() {
       // Initialize UI
       BUI.Manager.init();
 
-      const loadIfc = async (path) => {
+      const loadIfcFromURL = async (path) => {
         const file = await fetch(path);
         const data = await file.arrayBuffer();
         const buffer = new Uint8Array(data);
         await ifcLoader.load(buffer, false, "example", {
+          processData: { progressCallback: (progress) => console.log(progress) },
+        });
+      };
+
+      const loadIfcFromFile = async (file) => {
+        const data = await file.arrayBuffer();
+        const buffer = new Uint8Array(data);
+        await ifcLoader.load(buffer, false, file.name, {
           processData: { progressCallback: (progress) => console.log(progress) },
         });
       };
@@ -102,26 +110,38 @@ function App() {
         URL.revokeObjectURL(link.href);
       };
 
-      // Create UI panel (only once)
+      // UI Panel (only once)
       if (!panelRef.current) {
         const [panel, updatePanel] = BUI.Component.create((_) => {
-          let downloadBtn, loadBtn;
+          let downloadBtn, loadBtn, fileInputBtn;
+
           if (fragments.list.size > 0) {
             downloadBtn = BUI.html`<bim-button label="Download Fragments" @click=${downloadFragments}></bim-button>`;
           }
+
           if (fragments.list.size === 0) {
-            const onLoadIfc = async ({ target }) => {
+            const onLoadIfcURL = async ({ target }) => {
               target.label = "Conversion in progress...";
               target.loading = true;
-              await loadIfc(
+              await loadIfcFromURL(
                 "https://thatopen.github.io/engine_components/resources/ifc/school_str.ifc"
               );
               target.loading = false;
               target.label = "Load IFC";
             };
             loadBtn = BUI.html`
-              <bim-button label="Load IFC" @click=${onLoadIfc}></bim-button>
-              <bim-label>Open the console to see the progress!</bim-label>
+              <bim-button label="Load IFC (URL)" @click=${onLoadIfcURL}></bim-button>
+            `;
+
+            // File picker button
+            const onFileChange = async ({ target }) => {
+              if (target.files.length === 0) return;
+              const file = target.files[0];
+              await loadIfcFromFile(file);
+            };
+
+            fileInputBtn = BUI.html`
+              <input type="file" accept=".ifc" @change=${onFileChange} />
             `;
           }
 
@@ -129,6 +149,7 @@ function App() {
             <bim-panel active label="IfcLoader Tutorial" class="options-menu">
               <bim-panel-section label="Controls">
                 ${loadBtn}
+                ${fileInputBtn}
                 ${downloadBtn}
               </bim-panel-section>
             </bim-panel>
