@@ -1,5 +1,4 @@
 // core/Viewer.ts
-// @ts-ignore
 import Stats from "stats.js";
 import {
   Components,
@@ -12,10 +11,14 @@ import {
   FragmentsManager,
   World,
 } from "@thatopen/components";
-import { PerspectiveCamera, OrthographicCamera } from "three";
+
+import { PerspectiveCamera, OrthographicCamera, Object3D } from "three";
+import * as OBCF from "@thatopen/components-front"; // Highlighter
+import "@thatopen/ui-obc"; // <bim-panel> and <bui-properties-table>
 
 export class Viewer {
-  private static instance: Viewer | null = null; // Singleton
+  private static instance: Viewer | null = null;
+
   public static getInstance(container: HTMLElement): Viewer {
     if (!Viewer.instance) Viewer.instance = new Viewer(container);
     return Viewer.instance;
@@ -28,7 +31,8 @@ export class Viewer {
   public ifcLoader!: IfcLoader;
   public stats!: Stats;
 
-  // Flags
+  public onSelectObject?: (obj: Object3D | null, props?: any[]) => void;
+
   private initialized = false;
   private static gridCreated = false;
 
@@ -37,11 +41,13 @@ export class Viewer {
     void this.init();
   }
 
+  // -----------------
+  // Initialization
+  // -----------------
   private async init() {
     if (this.initialized) return;
     this.initialized = true;
 
-    // Initialize components
     this.components = new Components();
     const worlds = this.components.get(Worlds);
 
@@ -50,25 +56,25 @@ export class Viewer {
     this.world.renderer = new SimpleRenderer(this.components, this.container);
     this.world.camera = new OrthoPerspectiveCamera(this.components);
 
-    // Setup scene
     (this.world.scene as SimpleScene).setup();
     this.components.init();
+
     await this.world.camera.controls?.setLookAt(10, 10, 10, 0, 0, 0);
 
-    // ✅ Only one grid globally
     if (!Viewer.gridCreated) {
       this.components.get(Grids).create(this.world);
       Viewer.gridCreated = true;
     }
 
-    // Setup IFC & fragments
     await this.setupIfc();
     await this.setupFragments();
-
-    // Setup stats
+    this.setupHighlighter();
     this.setupStats();
   }
 
+  // -----------------
+  // IFC Loader
+  // -----------------
   private async setupIfc() {
     this.ifcLoader = this.components.get(IfcLoader);
     await this.ifcLoader.setup({
@@ -77,9 +83,11 @@ export class Viewer {
     });
   }
 
+  // -----------------
+  // Fragments
+  // -----------------
   private async setupFragments() {
-    const url =
-      "https://thatopen.github.io/engine_fragment/resources/worker.mjs";
+    const url = "https://thatopen.github.io/engine_fragment/resources/worker.mjs";
     const res = await fetch(url);
     const blob = await res.blob();
     const workerUrl = URL.createObjectURL(
@@ -103,15 +111,70 @@ export class Viewer {
     });
   }
 
+  // -----------------
+  // Highlighter + Property Extraction
+  // -----------------
+  private setupHighlighter() {
+    const highlighter = this.components.get(OBCF.Highlighter);
+    highlighter.setup({ world: this.world });
+
+    // Selection: extract properties for highlighted objects
+    highlighter.events.select.onHighlight.add(async (modelIdMap) => {
+      const promises: Promise<any[]>[] = [];
+
+      for (const [modelId, localIds] of Object.entries(modelIdMap)) {
+        const model = this.fragments.list.get(modelId);
+        if (!model) continue;
+
+        promises.push(model.getItemsData([...localIds]));
+      }
+
+      const itemsData = (await Promise.all(promises)).flat();
+
+      // Callback for custom logic
+      if (this.onSelectObject) {
+        this.onSelectObject(null, itemsData);
+      }
+
+      // Render in property window
+      this.renderItemsData(itemsData);
+    });
+
+    // Clear selection
+    highlighter.events.select.onClear.add(() => {
+      this.renderItemsData([]);
+    });
+  }
+
+  // -----------------
+  // Render ItemsData into <bui-properties-table>
+  // -----------------
+  private renderItemsData(data: any[]) {
+    const table = document.getElementById("properties-table") as any;
+    if (!table) return;
+
+    table.clear?.();
+    data.forEach((item) => {
+      const { name, value } = item;
+      table.addRow?.({ name, value });
+    });
+  }
+
+  // -----------------
+  // Stats
+  // -----------------
   private setupStats() {
     this.stats = new Stats();
     this.stats.showPanel(2);
     document.body.append(this.stats.dom);
+
     this.world.renderer?.onBeforeUpdate.add(() => this.stats.begin());
     this.world.renderer?.onAfterUpdate.add(() => this.stats.end());
   }
 
-  // Public APIs
+  // -----------------
+  // Public API
+  // -----------------
   public async loadIfcFromFile(file: File) {
     const data = await file.arrayBuffer();
     const buffer = new Uint8Array(data);
@@ -126,11 +189,12 @@ export class Viewer {
   }
 
   public downloadFragments() {
-    const model = this.fragments.list.values().next().value;
+    const model = this.fragments.list.values().next().value as any;
     if (!model) return;
 
-    model.getBuffer(false).then((buf) => {
-      const file = new File([buf], "fragments.frag");
+    model.getBuffer(false).then((buf: Uint8Array) => {
+      const arrayBufferView = new Uint8Array(buf);
+      const file = new File([arrayBufferView], "fragments.frag", { type: "application/octet-stream" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(file);
       link.download = file.name;

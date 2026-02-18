@@ -8,11 +8,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!containerRef.current) return;
-    if (viewer) return; // ✅ Prevent multiple instances
-
-    const v = Viewer.getInstance(containerRef.current); // Singleton
+    const v = Viewer.getInstance(containerRef.current); // ✅ Singleton to prevent double grids
     setViewer(v);
-  }, [viewer]);
+  }, []);
 
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
