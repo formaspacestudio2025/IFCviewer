@@ -8,7 +8,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const v = Viewer.getInstance(containerRef.current); // ✅ Singleton to prevent double grids
+    const v = Viewer.getInstance(containerRef.current);
     setViewer(v);
   }, []);
 

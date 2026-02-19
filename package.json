@@ -1,7 +1,0 @@
-{
-  "dependencies": {
-    "@thatopen/components": "^3.3.1",
-    "@thatopen/ui": "^3.3.3",
-    "@thatopen/ui-obc": "^3.3.3"
-  }
-}
