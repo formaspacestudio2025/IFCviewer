@@ -1,29 +1,53 @@
-// src/ui/ControlPanel.tsx
 import React, { useRef, useEffect, useState } from "react";
 import { Viewer } from "../core/Viewer";
+
+// Type for the web component table
+type PropertiesTable = HTMLElement & {
+  items?: Record<string, any>;
+  expanded?: boolean;
+  queryString?: string | null;
+  requestUpdate?: () => void;
+  tsv?: string;
+};
 
 interface Props {
   viewer: Viewer;
 }
 
 export const ControlPanel: React.FC<Props> = ({ viewer }) => {
-  const tableRef = useRef<any>(null); // ref for <bui-properties-table>
+  const tableRef = useRef<PropertiesTable>(null);
   const [expanded, setExpanded] = useState(false);
-  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Update the table when a selection is made in the viewer
+  // Transform IFC ItemsData into key/value object for bui-properties-table
+  const transformItemsData = (itemsData: any[]): Record<string, any> => {
+    const result: Record<string, any> = {};
+    itemsData.forEach((item, idx) => {
+      const entry: Record<string, any> = {};
+      for (const [key, prop] of Object.entries(item)) {
+        if (prop && typeof prop === "object" && "value" in prop) {
+          entry[key] = prop.value;
+        } else {
+          entry[key] = prop;
+        }
+      }
+      result[idx] = entry;
+    });
+    return result;
+  };
+
+  // Update table when a selection occurs
   useEffect(() => {
-    viewer.onSelectObject = (items) => {
+    viewer.onSelectObject = (items: any) => {
       if (!tableRef.current) return;
 
-      const itemsObj: Record<string, any> = {};
-      if (Array.isArray(items)) {
-        items.forEach((item, i) => (itemsObj[i] = item));
-      } else if (items) {
-        Object.assign(itemsObj, items);
-      }
+      const itemsArray = Array.isArray(items)
+        ? items
+        : Object.values(items || {});
 
-      tableRef.current.items = itemsObj;
+      const transformed = transformItemsData(itemsArray);
+
+      tableRef.current.items = transformed;
       tableRef.current.expanded = expanded;
       tableRef.current.queryString = searchQuery || null;
       tableRef.current.requestUpdate?.();
@@ -34,7 +58,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     };
   }, [viewer, expanded, searchQuery]);
 
-  // IFC Load handlers
+  // Handlers
   const handleLoadURL = async () => {
     await viewer.loadIfcFromURL(
       "https://thatopen.github.io/engine_components/resources/ifc/school_str.ifc"
@@ -48,17 +72,14 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
 
   const handleDownload = () => viewer.downloadFragments();
 
-  // Expand/Collapse table
   const toggleExpand = () => setExpanded((prev) => !prev);
 
-  // Copy table as TSV
   const copyTSV = async () => {
     if (!tableRef.current?.tsv) return;
     await navigator.clipboard.writeText(tableRef.current.tsv);
     alert("Copied properties as TSV!");
   };
 
-  // Search input
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setSearchQuery(value);
@@ -74,11 +95,11 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         position: "absolute",
         top: 10,
         left: 10,
+        width: "350px",
+        zIndex: 10,
         background: "rgba(255,255,255,0.95)",
         padding: "1rem",
         borderRadius: "8px",
-        zIndex: 10,
-        width: "350px",
       }}
     >
       {/* IFC Load Buttons */}
@@ -103,8 +124,8 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
 
       {/* Properties Panel */}
       <bim-panel label="Properties">
-        <bim-panel-section label="Element Data">
-          {/* Expand / Collapse & Copy */}
+        <bim-panel-section style={{ minHeight: "400px" }} label="Element Data">
+          {/* Actions */}
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: 8 }}>
             <button onClick={toggleExpand}>
               {expanded ? "Collapse" : "Expand"}
@@ -122,7 +143,10 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
           />
 
           {/* Properties Table */}
-          <bui-properties-table ref={tableRef} />
+          <bui-properties-table
+            ref={tableRef}
+            style={{ display: "block", height: "400px", overflow: "auto" }}
+          />
         </bim-panel-section>
       </bim-panel>
     </div>
