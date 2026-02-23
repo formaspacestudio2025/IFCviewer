@@ -51,10 +51,15 @@ export class Viewer {
   private initialized = false;
   private static gridCreated = false;
   private modelNames = new Map<string, string>();
+  private readonly readyPromise: Promise<void>;
 
   private constructor(container: HTMLElement) {
     this.container = container;
-    void this.init();
+    this.readyPromise = this.init();
+  }
+
+  private async ensureReady() {
+    await this.readyPromise;
   }
 
   private async init() {
@@ -84,6 +89,9 @@ export class Viewer {
 
     await this.setupIfc();
     await this.setupFragments();
+
+    this.classifier = this.components.get(Classifier);
+    this.hider = this.components.get(Hider);
     this.setupHighlighter();
     this.setupStats();
   }
@@ -216,6 +224,7 @@ export class Viewer {
   }
 
   public async getModelsOverview(propertyKey: string): Promise<ModelOverview[]> {
+    await this.ensureReady();
     await this.classifyByProperty(propertyKey);
 
     const classGroups = this.classifier.list.get("IFC Classes");
@@ -256,6 +265,7 @@ export class Viewer {
   }
 
   public async loadIfcFromFile(file: File) {
+    await this.ensureReady();
     const data = await file.arrayBuffer();
     const buffer = new Uint8Array(data);
     await this.ifcLoader.load(buffer, false, file.name);
@@ -268,50 +278,62 @@ export class Viewer {
   }
 
   public async removeModel(modelId: string) {
+    await this.ensureReady();
     this.fragments.list.delete(modelId);
   }
 
   public async hideModel(modelId: string) {
+    await this.ensureReady();
     await this.hider.set(false, await this.getModelIdMap(modelId));
   }
 
   public async showModel(modelId: string) {
+    await this.ensureReady();
     await this.hider.set(true, await this.getModelIdMap(modelId));
   }
 
   public async isolateModel(modelId: string) {
+    await this.ensureReady();
     await this.hider.isolate(await this.getModelIdMap(modelId));
   }
 
   public async hideClass(modelId: string, className: string) {
+    await this.ensureReady();
     await this.hider.set(false, await this.getClassIdMap(modelId, className));
   }
 
   public async showClass(modelId: string, className: string) {
+    await this.ensureReady();
     await this.hider.set(true, await this.getClassIdMap(modelId, className));
   }
 
   public async isolateClass(modelId: string, className: string) {
+    await this.ensureReady();
     await this.hider.isolate(await this.getClassIdMap(modelId, className));
   }
 
   public async hidePropertyGroup(modelId: string, propertyKey: string, groupName: string) {
+    await this.ensureReady();
     await this.hider.set(false, await this.getPropertyGroupIdMap(modelId, propertyKey, groupName));
   }
 
   public async showPropertyGroup(modelId: string, propertyKey: string, groupName: string) {
+    await this.ensureReady();
     await this.hider.set(true, await this.getPropertyGroupIdMap(modelId, propertyKey, groupName));
   }
 
   public async isolatePropertyGroup(modelId: string, propertyKey: string, groupName: string) {
+    await this.ensureReady();
     await this.hider.isolate(await this.getPropertyGroupIdMap(modelId, propertyKey, groupName));
   }
 
   public async colorModel(modelId: string, color: string) {
+    await this.ensureReady();
     await this.fragments.highlight({ color: new Color(color), opacity: 1, transparent: false } as any, await this.getModelIdMap(modelId));
   }
 
   public async colorClass(modelId: string, className: string, color: string) {
+    await this.ensureReady();
     await this.fragments.highlight(
       { color: new Color(color), opacity: 1, transparent: false } as any,
       await this.getClassIdMap(modelId, className)
@@ -319,6 +341,7 @@ export class Viewer {
   }
 
   public async colorPropertyGroup(modelId: string, propertyKey: string, groupName: string, color: string) {
+    await this.ensureReady();
     await this.fragments.highlight(
       { color: new Color(color), opacity: 1, transparent: false } as any,
       await this.getPropertyGroupIdMap(modelId, propertyKey, groupName)
@@ -326,14 +349,18 @@ export class Viewer {
   }
 
   public async resetColors() {
+    await this.ensureReady();
     await this.fragments.resetHighlight();
   }
 
   public async showAll() {
+    await this.ensureReady();
     await this.hider.set(true);
   }
 
-  public downloadFragments() {
+  public async downloadFragments() {
+    await this.ensureReady();
+
     const model = this.fragments.list.values().next().value as any;
     if (!model) return;
 
