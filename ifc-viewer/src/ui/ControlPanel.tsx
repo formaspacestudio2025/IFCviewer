@@ -1,14 +1,29 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Viewer } from "../core/Viewer";
+import { ModelOverview, Viewer } from "../core/Viewer";
 
 interface Props {
   viewer: Viewer;
 }
 
+const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
+
 export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [expanded, setExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItem, setSelectedItem] = useState<Record<string, any> | null>(null);
+  const [models, setModels] = useState<ModelOverview[]>([]);
+  const [propertyKey, setPropertyKey] = useState("PredefinedType");
+  const [loading, setLoading] = useState(false);
+
+  const refreshModels = async () => {
+    setLoading(true);
+    try {
+      const data = await viewer.getModelsOverview(propertyKey);
+      setModels(data);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     viewer.onSelectObject = (items: any) => {
@@ -17,19 +32,24 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
       setSelectedItem(firstItem ?? null);
     };
 
+    viewer.onModelsChanged = () => {
+      void refreshModels();
+    };
+
+    void refreshModels();
+
     return () => {
       viewer.onSelectObject = undefined;
+      viewer.onModelsChanged = undefined;
     };
-  }, [viewer]);
+  }, [viewer, propertyKey]);
 
   const flattenedRows = useMemo(() => {
     if (!selectedItem) return [] as Array<{ key: string; value: string }>;
 
     const rows: Array<{ key: string; value: string }> = [];
     for (const [key, rawValue] of Object.entries(selectedItem)) {
-      if (searchQuery && !key.toLowerCase().includes(searchQuery.toLowerCase())) {
-        continue;
-      }
+      if (searchQuery && !key.toLowerCase().includes(searchQuery.toLowerCase())) continue;
 
       let normalized: unknown = rawValue;
       if (rawValue && typeof rawValue === "object" && "value" in (rawValue as object)) {
@@ -47,21 +67,14 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     return rows;
   }, [expanded, searchQuery, selectedItem]);
 
-  // Handlers
-  const handleLoadURL = async () => {
-    await viewer.loadIfcFromURL(
-      "https://thatopen.github.io/engine_components/resources/ifc/school_str.ifc"
-    );
-  };
-
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
-    await viewer.loadIfcFromFile(e.target.files[0]);
+    for (const file of Array.from(e.target.files)) {
+      await viewer.loadIfcFromFile(file);
+    }
+    e.target.value = "";
+    await refreshModels();
   };
-
-  const handleDownload = () => viewer.downloadFragments();
-
-  const toggleExpand = () => setExpanded((prev) => !prev);
 
   const copyTSV = async () => {
     if (!flattenedRows.length) return;
@@ -70,46 +83,104 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     alert("Copied properties as TSV!");
   };
 
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
-  };
-
   return (
     <div
       style={{
         position: "absolute",
         top: 10,
         left: 10,
-        width: "350px",
+        width: "420px",
+        maxHeight: "95vh",
+        overflow: "auto",
         zIndex: 10,
         background: "rgba(255,255,255,0.95)",
         padding: "1rem",
         borderRadius: "8px",
+        display: "grid",
+        gap: "0.75rem",
       }}
     >
-      <button
-        onClick={handleLoadURL}
-        style={{ display: "block", marginBottom: 8, width: "100%" }}
-      >
-        Load IFC (URL)
-      </button>
-      <input
-        type="file"
-        accept=".ifc"
-        onChange={handleFileChange}
-        style={{ display: "block", marginBottom: 8, width: "100%" }}
-      />
-      <button
-        onClick={handleDownload}
-        style={{ display: "block", marginBottom: 16, width: "100%" }}
-      >
-        Download Fragments
-      </button>
+      <div>
+        <input type="file" accept=".ifc" multiple onChange={handleFileChange} style={{ width: "100%" }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <button style={{ flex: 1 }} onClick={() => void viewer.showAll()}>
+          Show All
+        </button>
+        <button style={{ flex: 1 }} onClick={() => void viewer.resetColors()}>
+          Reset Colors
+        </button>
+      </div>
+
+      <div style={{ borderTop: "1px solid #ddd", paddingTop: 8 }}>
+        <h3 style={{ margin: "0 0 8px" }}>Uploaded Models</h3>
+        {loading && <p style={{ margin: 0 }}>Refreshing model list...</p>}
+        {!models.length && !loading && <p style={{ margin: 0 }}>No IFC loaded.</p>}
+
+        {models.map((model) => (
+          <details key={model.id} open style={{ border: "1px solid #ddd", borderRadius: 6, padding: 8, marginBottom: 8 }}>
+            <summary style={{ fontWeight: 700 }}>{model.name}</summary>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
+              <button onClick={() => void viewer.showModel(model.id)}>Show</button>
+              <button onClick={() => void viewer.hideModel(model.id)}>Hide</button>
+              <button onClick={() => void viewer.isolateModel(model.id)}>Isolate</button>
+              <button onClick={() => void viewer.colorModel(model.id, randomColor())}>Color</button>
+              <button onClick={() => void viewer.removeModel(model.id)}>Remove</button>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <strong>IFC Class Elements</strong>
+              {model.classes.map((item) => (
+                <div key={`${model.id}-${item.name}`} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, marginTop: 6 }}>
+                  <span title={item.name}>
+                    {item.name} ({item.count})
+                  </span>
+                  <span style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => void viewer.showClass(model.id, item.name)}>S</button>
+                    <button onClick={() => void viewer.hideClass(model.id, item.name)}>H</button>
+                    <button onClick={() => void viewer.isolateClass(model.id, item.name)}>I</button>
+                    <button onClick={() => void viewer.colorClass(model.id, item.name, randomColor())}>C</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginTop: 12, borderTop: "1px dashed #ccc", paddingTop: 8 }}>
+              <strong>Groups by Property</strong>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <input
+                  value={propertyKey}
+                  onChange={(e) => setPropertyKey(e.target.value)}
+                  placeholder="e.g. PredefinedType"
+                  style={{ flex: 1 }}
+                />
+                <button onClick={() => void refreshModels()}>Build</button>
+              </div>
+
+              {model.propertyGroups.map((group) => (
+                <div key={`${model.id}-${group.name}`} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, marginTop: 6 }}>
+                  <span title={group.name}>
+                    {group.name} ({group.count})
+                  </span>
+                  <span style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => void viewer.showPropertyGroup(model.id, propertyKey, group.name)}>S</button>
+                    <button onClick={() => void viewer.hidePropertyGroup(model.id, propertyKey, group.name)}>H</button>
+                    <button onClick={() => void viewer.isolatePropertyGroup(model.id, propertyKey, group.name)}>I</button>
+                    <button onClick={() => void viewer.colorPropertyGroup(model.id, propertyKey, group.name, randomColor())}>C</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
 
       <bim-panel label="Properties">
-        <bim-panel-section style={{ minHeight: "400px" }} label="Element Data">
+        <bim-panel-section style={{ minHeight: "300px" }} label="Selected Element Data">
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: 8 }}>
-            <button onClick={toggleExpand}>{expanded ? "Collapse" : "Expand"}</button>
+            <button onClick={() => setExpanded((prev) => !prev)}>{expanded ? "Collapse" : "Expand"}</button>
             <button onClick={copyTSV}>Copy as TSV</button>
           </div>
 
@@ -117,11 +188,11 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
             type="text"
             placeholder="Search property..."
             value={searchQuery}
-            onChange={handleSearch}
+            onChange={(e) => setSearchQuery(e.target.value)}
             style={{ width: "100%", marginBottom: 8, padding: "0.25rem" }}
           />
 
-          <div style={{ height: "400px", overflow: "auto", fontSize: 13 }}>
+          <div style={{ height: "280px", overflow: "auto", fontSize: 13 }}>
             {!selectedItem ? (
               <p style={{ margin: 0, color: "#666" }}>Select an element to see its properties.</p>
             ) : (
@@ -129,15 +200,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
                 <tbody>
                   {flattenedRows.map((row) => (
                     <tr key={row.key}>
-                      <td
-                        style={{
-                          borderBottom: "1px solid #ddd",
-                          padding: "0.35rem 0.25rem",
-                          fontWeight: 600,
-                          verticalAlign: "top",
-                          width: "40%",
-                        }}
-                      >
+                      <td style={{ borderBottom: "1px solid #ddd", padding: "0.35rem 0.25rem", fontWeight: 600, width: "40%" }}>
                         {row.key}
                       </td>
                       <td
