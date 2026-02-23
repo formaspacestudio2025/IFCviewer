@@ -1,19 +1,32 @@
-// core/Viewer.ts
 import Stats from "stats.js";
 import {
+  Classifier,
   Components,
-  Worlds,
-  SimpleScene,
+  FragmentsManager,
+  Grids,
+  Hider,
+  IfcLoader,
   OrthoPerspectiveCamera,
   SimpleRenderer,
-  Grids,
-  IfcLoader,
-  FragmentsManager,
+  SimpleScene,
   World,
+  Worlds,
 } from "@thatopen/components";
 
 import * as OBCF from "@thatopen/components-front";
-import { PerspectiveCamera, OrthographicCamera } from "three";
+import { Color, OrthographicCamera, PerspectiveCamera } from "three";
+
+export interface ModelGroupInfo {
+  name: string;
+  count: number;
+}
+
+export interface ModelOverview {
+  id: string;
+  name: string;
+  classes: ModelGroupInfo[];
+  propertyGroups: ModelGroupInfo[];
+}
 
 export class Viewer {
   private static instance: Viewer | null = null;
@@ -29,20 +42,21 @@ export class Viewer {
   public fragments!: FragmentsManager;
   public ifcLoader!: IfcLoader;
   public stats!: Stats;
+  public classifier!: Classifier;
+  public hider!: Hider;
 
   public onSelectObject?: (items: any) => void;
+  public onModelsChanged?: () => void;
 
   private initialized = false;
   private static gridCreated = false;
+  private modelNames = new Map<string, string>();
 
   private constructor(container: HTMLElement) {
     this.container = container;
     void this.init();
   }
 
-  // =============================
-  // INIT
-  // =============================
   private async init() {
     if (this.initialized) return;
     this.initialized = true;
@@ -65,15 +79,15 @@ export class Viewer {
       Viewer.gridCreated = true;
     }
 
+    this.classifier = this.components.get(Classifier);
+    this.hider = this.components.get(Hider);
+
     await this.setupIfc();
     await this.setupFragments();
     this.setupHighlighter();
     this.setupStats();
   }
 
-  // =============================
-  // IFC LOADER
-  // =============================
   private async setupIfc() {
     this.ifcLoader = this.components.get(IfcLoader);
     await this.ifcLoader.setup({
@@ -82,31 +96,37 @@ export class Viewer {
     });
   }
 
-  // =============================
-  // FRAGMENTS
-  // =============================
   private async setupFragments() {
-    const workerUrl = "/worker.mjs"; // local copy
+    const workerUrl = "/worker.mjs";
     this.fragments = this.components.get(FragmentsManager);
     this.fragments.init(workerUrl);
 
-    this.world.camera.controls?.addEventListener("update", () =>
-      this.fragments.core.update()
-    );
+    this.world.camera.controls?.addEventListener("update", () => this.fragments.core.update());
 
-    this.fragments.list.onItemSet.add(({ value: model }) => {
+    this.fragments.list.onItemSet.add(async ({ key: modelId, value: model }) => {
       const cam = this.world.camera.three;
       if (cam instanceof PerspectiveCamera || cam instanceof OrthographicCamera) {
         model.useCamera(cam);
       }
       this.world.scene.three.add(model.object);
       this.fragments.core.update(true);
+
+      if (!this.modelNames.has(modelId)) {
+        this.modelNames.set(modelId, `Model ${this.modelNames.size + 1}`);
+      }
+
+      await this.refreshClassifications();
+      this.onModelsChanged?.();
+    });
+
+    this.fragments.list.onBeforeDelete.add(async ({ key: modelId, value: model }) => {
+      this.world.scene.three.remove(model.object);
+      this.modelNames.delete(modelId);
+      await this.refreshClassifications();
+      this.onModelsChanged?.();
     });
   }
 
-  // =============================
-  // HIGHLIGHTER + PROPERTIES
-  // =============================
   private setupHighlighter() {
     const highlighter = this.components.get(OBCF.Highlighter);
     highlighter.setup({ world: this.world });
@@ -117,11 +137,8 @@ export class Viewer {
         if (!model) continue;
 
         const itemsData = await model.getItemsData([...localIds]);
-        console.log("ItemsData:", itemsData);
 
-        // send data to ControlPanel
         if (this.onSelectObject) {
-          // Convert array to object for bui-properties-table
           const itemsObj: Record<string, any> = {};
           itemsData.forEach((item, i) => {
             itemsObj[i] = item;
@@ -129,18 +146,15 @@ export class Viewer {
           this.onSelectObject(itemsObj);
         }
 
-        break; // single selection
+        break;
       }
     });
 
     highlighter.events.select.onClear.add(() => {
-      if (this.onSelectObject) this.onSelectObject({});
+      this.onSelectObject?.({});
     });
   }
 
-  // =============================
-  // STATS
-  // =============================
   private setupStats() {
     this.stats = new Stats();
     this.stats.showPanel(2);
@@ -150,20 +164,173 @@ export class Viewer {
     this.world.renderer?.onAfterUpdate.add(() => this.stats.end());
   }
 
-  // =============================
-  // PUBLIC API
-  // =============================
+  private async refreshClassifications(propertyKey = "PredefinedType") {
+    this.classifier.list.clear();
+
+    await this.classifier.byModel({ classificationName: "Models" });
+    await this.classifier.byCategory({ classificationName: "IFC Classes" });
+    await this.classifyByProperty(propertyKey);
+  }
+
+  private async classifyByProperty(propertyKey: string) {
+    const classificationName = this.getPropertyClassificationName(propertyKey);
+    await this.classifier.aggregateItems(
+      classificationName,
+      { categories: [/.*/] },
+      {
+        aggregationCallback: (item, register) => {
+          const localId = item?._localId;
+          const prop = item?.[propertyKey];
+          if (!localId || !("value" in localId) || !prop || !("value" in prop)) return;
+
+          const value = String(prop.value ?? "").trim();
+          if (!value) return;
+
+          register(value, localId.value);
+        },
+      }
+    );
+  }
+
+  private getPropertyClassificationName(propertyKey: string) {
+    return `Property:${propertyKey}`;
+  }
+
+  private async getModelIdMap(modelId: string) {
+    return this.classifier.find({ Models: [modelId] });
+  }
+
+  private async getClassIdMap(modelId: string, className: string) {
+    return this.classifier.find({ Models: [modelId], "IFC Classes": [className] });
+  }
+
+  private async getPropertyGroupIdMap(modelId: string, propertyKey: string, groupName: string) {
+    return this.classifier.find({
+      Models: [modelId],
+      [this.getPropertyClassificationName(propertyKey)]: [groupName],
+    });
+  }
+
+  private getModelItemCount(itemsByModel: Record<string, Set<number>>, modelId: string) {
+    return itemsByModel[modelId]?.size ?? 0;
+  }
+
+  public async getModelsOverview(propertyKey: string): Promise<ModelOverview[]> {
+    await this.classifyByProperty(propertyKey);
+
+    const classGroups = this.classifier.list.get("IFC Classes");
+    const propertyGroups = this.classifier.list.get(this.getPropertyClassificationName(propertyKey));
+
+    const overviews: ModelOverview[] = [];
+
+    for (const modelId of this.fragments.list.keys()) {
+      const name = this.modelNames.get(modelId) ?? modelId;
+
+      const classes: ModelGroupInfo[] = [];
+      if (classGroups) {
+        for (const [className] of classGroups) {
+          const items = await this.getClassIdMap(modelId, className);
+          const count = this.getModelItemCount(items, modelId);
+          if (count > 0) classes.push({ name: className, count });
+        }
+      }
+
+      const groupedByProperty: ModelGroupInfo[] = [];
+      if (propertyGroups) {
+        for (const [groupName] of propertyGroups) {
+          const items = await this.getPropertyGroupIdMap(modelId, propertyKey, groupName);
+          const count = this.getModelItemCount(items, modelId);
+          if (count > 0) groupedByProperty.push({ name: groupName, count });
+        }
+      }
+
+      overviews.push({
+        id: modelId,
+        name,
+        classes: classes.sort((a, b) => b.count - a.count),
+        propertyGroups: groupedByProperty.sort((a, b) => b.count - a.count),
+      });
+    }
+
+    return overviews;
+  }
+
   public async loadIfcFromFile(file: File) {
     const data = await file.arrayBuffer();
     const buffer = new Uint8Array(data);
     await this.ifcLoader.load(buffer, false, file.name);
+
+    const latestModelId = Array.from(this.fragments.list.keys()).at(-1);
+    if (latestModelId) {
+      this.modelNames.set(latestModelId, file.name);
+      this.onModelsChanged?.();
+    }
   }
 
-  public async loadIfcFromURL(url: string) {
-    const file = await fetch(url);
-    const data = await file.arrayBuffer();
-    const buffer = new Uint8Array(data);
-    await this.ifcLoader.load(buffer, false, "model.ifc");
+  public async removeModel(modelId: string) {
+    this.fragments.list.delete(modelId);
+  }
+
+  public async hideModel(modelId: string) {
+    await this.hider.set(false, await this.getModelIdMap(modelId));
+  }
+
+  public async showModel(modelId: string) {
+    await this.hider.set(true, await this.getModelIdMap(modelId));
+  }
+
+  public async isolateModel(modelId: string) {
+    await this.hider.isolate(await this.getModelIdMap(modelId));
+  }
+
+  public async hideClass(modelId: string, className: string) {
+    await this.hider.set(false, await this.getClassIdMap(modelId, className));
+  }
+
+  public async showClass(modelId: string, className: string) {
+    await this.hider.set(true, await this.getClassIdMap(modelId, className));
+  }
+
+  public async isolateClass(modelId: string, className: string) {
+    await this.hider.isolate(await this.getClassIdMap(modelId, className));
+  }
+
+  public async hidePropertyGroup(modelId: string, propertyKey: string, groupName: string) {
+    await this.hider.set(false, await this.getPropertyGroupIdMap(modelId, propertyKey, groupName));
+  }
+
+  public async showPropertyGroup(modelId: string, propertyKey: string, groupName: string) {
+    await this.hider.set(true, await this.getPropertyGroupIdMap(modelId, propertyKey, groupName));
+  }
+
+  public async isolatePropertyGroup(modelId: string, propertyKey: string, groupName: string) {
+    await this.hider.isolate(await this.getPropertyGroupIdMap(modelId, propertyKey, groupName));
+  }
+
+  public async colorModel(modelId: string, color: string) {
+    await this.fragments.highlight({ color: new Color(color), opacity: 1, transparent: false } as any, await this.getModelIdMap(modelId));
+  }
+
+  public async colorClass(modelId: string, className: string, color: string) {
+    await this.fragments.highlight(
+      { color: new Color(color), opacity: 1, transparent: false } as any,
+      await this.getClassIdMap(modelId, className)
+    );
+  }
+
+  public async colorPropertyGroup(modelId: string, propertyKey: string, groupName: string, color: string) {
+    await this.fragments.highlight(
+      { color: new Color(color), opacity: 1, transparent: false } as any,
+      await this.getPropertyGroupIdMap(modelId, propertyKey, groupName)
+    );
+  }
+
+  public async resetColors() {
+    await this.fragments.resetHighlight();
+  }
+
+  public async showAll() {
+    await this.hider.set(true);
   }
 
   public downloadFragments() {
