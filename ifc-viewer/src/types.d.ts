@@ -1,4 +1,4 @@
-declare module "react" {
+declare module "react/jsx-runtime" {
   namespace JSX {
     interface IntrinsicElements {
       "bim-panel": any;
