@@ -84,6 +84,9 @@ export class Viewer {
       Viewer.gridCreated = true;
     }
 
+    this.classifier = this.components.get(Classifier);
+    this.hider = this.components.get(Hider);
+
     await this.setupIfc();
     await this.setupFragments();
 
