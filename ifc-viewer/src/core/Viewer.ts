@@ -307,18 +307,6 @@ export class Viewer {
     await this.hider.set(false, await this.getClassIdMap(modelId, className));
   }
 
-  }
-
-  public async isolateModel(modelId: string) {
-    await this.ensureReady();
-    await this.hider.isolate(await this.getModelIdMap(modelId));
-  }
-
-  public async hideClass(modelId: string, className: string) {
-    await this.ensureReady();
-    await this.hider.set(false, await this.getClassIdMap(modelId, className));
-  }
-
   public async showClass(modelId: string, className: string) {
     await this.ensureReady();
     await this.hider.set(true, await this.getClassIdMap(modelId, className));
