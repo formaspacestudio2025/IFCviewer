@@ -211,10 +211,13 @@ export class Viewer {
     });
   }
 
+  private getModelItemCount(itemsByModel: Record<string, Set<number>>, modelId: string) {
+    return itemsByModel[modelId]?.size ?? 0;
+  }
+
   public async getModelsOverview(propertyKey: string): Promise<ModelOverview[]> {
     await this.classifyByProperty(propertyKey);
 
-    const modelGroups = this.classifier.list.get("Models");
     const classGroups = this.classifier.list.get("IFC Classes");
     const propertyGroups = this.classifier.list.get(this.getPropertyClassificationName(propertyKey));
 
@@ -227,7 +230,7 @@ export class Viewer {
       if (classGroups) {
         for (const [className] of classGroups) {
           const items = await this.getClassIdMap(modelId, className);
-          const count = items[modelId]?.size ?? items[modelId]?.length ?? 0;
+          const count = this.getModelItemCount(items, modelId);
           if (count > 0) classes.push({ name: className, count });
         }
       }
@@ -236,7 +239,7 @@ export class Viewer {
       if (propertyGroups) {
         for (const [groupName] of propertyGroups) {
           const items = await this.getPropertyGroupIdMap(modelId, propertyKey, groupName);
-          const count = items[modelId]?.size ?? items[modelId]?.length ?? 0;
+          const count = this.getModelItemCount(items, modelId);
           if (count > 0) groupedByProperty.push({ name: groupName, count });
         }
       }
@@ -249,7 +252,6 @@ export class Viewer {
       });
     }
 
-    if (!modelGroups) return overviews;
     return overviews;
   }
 
