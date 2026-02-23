@@ -1,62 +1,51 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Viewer } from "../core/Viewer";
-
-// Type for the web component table
-type PropertiesTable = HTMLElement & {
-  items?: Record<string, any>;
-  expanded?: boolean;
-  queryString?: string | null;
-  requestUpdate?: () => void;
-  tsv?: string;
-};
 
 interface Props {
   viewer: Viewer;
 }
 
 export const ControlPanel: React.FC<Props> = ({ viewer }) => {
-  const tableRef = useRef<PropertiesTable>(null);
   const [expanded, setExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedItem, setSelectedItem] = useState<Record<string, any> | null>(null);
 
-  // Transform IFC ItemsData into key/value object for bui-properties-table
-  const transformItemsData = (itemsData: any[]): Record<string, any> => {
-    const result: Record<string, any> = {};
-    itemsData.forEach((item, idx) => {
-      const entry: Record<string, any> = {};
-      for (const [key, prop] of Object.entries(item)) {
-        if (prop && typeof prop === "object" && "value" in prop) {
-          entry[key] = prop.value;
-        } else {
-          entry[key] = prop;
-        }
-      }
-      result[idx] = entry;
-    });
-    return result;
-  };
-
-  // Update table when a selection occurs
   useEffect(() => {
     viewer.onSelectObject = (items: any) => {
-      if (!tableRef.current) return;
-
-      const itemsArray = Array.isArray(items)
-        ? items
-        : Object.values(items || {});
-
-      const transformed = transformItemsData(itemsArray);
-
-      tableRef.current.items = transformed;
-      tableRef.current.expanded = expanded;
-      tableRef.current.queryString = searchQuery || null;
-      tableRef.current.requestUpdate?.();
+      const itemsArray = Array.isArray(items) ? items : Object.values(items || {});
+      const firstItem = itemsArray[0] as Record<string, any> | undefined;
+      setSelectedItem(firstItem ?? null);
     };
 
     return () => {
       viewer.onSelectObject = undefined;
     };
-  }, [viewer, expanded, searchQuery]);
+  }, [viewer]);
+
+  const flattenedRows = useMemo(() => {
+    if (!selectedItem) return [] as Array<{ key: string; value: string }>;
+
+    const rows: Array<{ key: string; value: string }> = [];
+    for (const [key, rawValue] of Object.entries(selectedItem)) {
+      if (searchQuery && !key.toLowerCase().includes(searchQuery.toLowerCase())) {
+        continue;
+      }
+
+      let normalized: unknown = rawValue;
+      if (rawValue && typeof rawValue === "object" && "value" in (rawValue as object)) {
+        normalized = (rawValue as { value: unknown }).value;
+      }
+
+      const value =
+        typeof normalized === "object"
+          ? JSON.stringify(normalized, null, expanded ? 2 : 0)
+          : String(normalized ?? "");
+
+      rows.push({ key, value });
+    }
+
+    return rows;
+  }, [expanded, searchQuery, selectedItem]);
 
   // Handlers
   const handleLoadURL = async () => {
@@ -75,18 +64,14 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const toggleExpand = () => setExpanded((prev) => !prev);
 
   const copyTSV = async () => {
-    if (!tableRef.current?.tsv) return;
-    await navigator.clipboard.writeText(tableRef.current.tsv);
+    if (!flattenedRows.length) return;
+    const tsv = ["Property\tValue", ...flattenedRows.map((row) => `${row.key}\t${row.value}`)].join("\n");
+    await navigator.clipboard.writeText(tsv);
     alert("Copied properties as TSV!");
   };
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setSearchQuery(value);
-    if (tableRef.current) {
-      tableRef.current.queryString = value || null;
-      tableRef.current.requestUpdate?.();
-    }
+    setSearchQuery(e.target.value);
   };
 
   return (
@@ -102,7 +87,6 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         borderRadius: "8px",
       }}
     >
-      {/* IFC Load Buttons */}
       <button
         onClick={handleLoadURL}
         style={{ display: "block", marginBottom: 8, width: "100%" }}
@@ -122,18 +106,13 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         Download Fragments
       </button>
 
-      {/* Properties Panel */}
       <bim-panel label="Properties">
         <bim-panel-section style={{ minHeight: "400px" }} label="Element Data">
-          {/* Actions */}
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: 8 }}>
-            <button onClick={toggleExpand}>
-              {expanded ? "Collapse" : "Expand"}
-            </button>
+            <button onClick={toggleExpand}>{expanded ? "Collapse" : "Expand"}</button>
             <button onClick={copyTSV}>Copy as TSV</button>
           </div>
 
-          {/* Search */}
           <input
             type="text"
             placeholder="Search property..."
@@ -142,11 +121,44 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
             style={{ width: "100%", marginBottom: 8, padding: "0.25rem" }}
           />
 
-          {/* Properties Table */}
-          <bui-properties-table
-            ref={tableRef}
-            style={{ display: "block", height: "400px", overflow: "auto" }}
-          />
+          <div style={{ height: "400px", overflow: "auto", fontSize: 13 }}>
+            {!selectedItem ? (
+              <p style={{ margin: 0, color: "#666" }}>Select an element to see its properties.</p>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <tbody>
+                  {flattenedRows.map((row) => (
+                    <tr key={row.key}>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #ddd",
+                          padding: "0.35rem 0.25rem",
+                          fontWeight: 600,
+                          verticalAlign: "top",
+                          width: "40%",
+                        }}
+                      >
+                        {row.key}
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #ddd",
+                          padding: "0.35rem 0.25rem",
+                          whiteSpace: expanded ? "pre-wrap" : "nowrap",
+                          textOverflow: "ellipsis",
+                          overflow: "hidden",
+                          maxWidth: 1,
+                        }}
+                        title={row.value}
+                      >
+                        {row.value}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </bim-panel-section>
       </bim-panel>
     </div>
