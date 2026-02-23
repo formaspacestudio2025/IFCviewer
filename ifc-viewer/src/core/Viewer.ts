@@ -89,6 +89,9 @@ export class Viewer {
       Viewer.gridCreated = true;
     }
 
+    this.classifier = this.components.get(Classifier);
+    this.hider = this.components.get(Hider);
+
     await this.setupIfc();
     await this.setupFragments();
 
@@ -107,6 +110,10 @@ export class Viewer {
   }
 
   private async setupFragments() {
+    const workerUrl = "/worker.mjs";
+    this.fragments = this.components.get(FragmentsManager);
+    this.fragments.init(workerUrl);
+
     this.world.camera.controls?.addEventListener("update", () => this.fragments.core.update());
 
     this.fragments.list.onItemSet.add(async ({ key: modelId, value: model }) => {
@@ -288,6 +295,18 @@ export class Viewer {
   public async showModel(modelId: string) {
     await this.ensureReady();
     await this.hider.set(true, await this.getModelIdMap(modelId));
+  }
+
+  public async isolateModel(modelId: string) {
+    await this.ensureReady();
+    await this.hider.isolate(await this.getModelIdMap(modelId));
+  }
+
+  public async hideClass(modelId: string, className: string) {
+    await this.ensureReady();
+    await this.hider.set(false, await this.getClassIdMap(modelId, className));
+  }
+
   }
 
   public async isolateModel(modelId: string) {
