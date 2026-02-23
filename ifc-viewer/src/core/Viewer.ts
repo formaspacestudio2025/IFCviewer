@@ -74,6 +74,11 @@ export class Viewer {
     this.world.renderer = new SimpleRenderer(this.components, this.container);
     this.world.camera = new OrthoPerspectiveCamera(this.components);
 
+    this.fragments = this.components.get(FragmentsManager);
+    if (!this.fragments.initialized) {
+      this.fragments.init("/worker.mjs");
+    }
+
     (this.world.scene as SimpleScene).setup();
     this.components.init();
 
@@ -290,6 +295,18 @@ export class Viewer {
   public async showModel(modelId: string) {
     await this.ensureReady();
     await this.hider.set(true, await this.getModelIdMap(modelId));
+  }
+
+  public async isolateModel(modelId: string) {
+    await this.ensureReady();
+    await this.hider.isolate(await this.getModelIdMap(modelId));
+  }
+
+  public async hideClass(modelId: string, className: string) {
+    await this.ensureReady();
+    await this.hider.set(false, await this.getClassIdMap(modelId, className));
+  }
+
   }
 
   public async isolateModel(modelId: string) {
