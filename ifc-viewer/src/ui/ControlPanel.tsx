@@ -35,6 +35,9 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [qcBusy, setQcBusy] = useState(false);
   const [nonComplianceColor, setNonComplianceColor] = useState("#d11a2a");
   const [copilotQuery, setCopilotQuery] = useState("");
+  const [copilotApiKey, setCopilotApiKey] = useState(() => localStorage.getItem("openai_api_key") ?? "");
+  const [copilotModel, setCopilotModel] = useState("gpt-4.1-mini");
+  const [copilotBusy, setCopilotBusy] = useState(false);
   const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([
     { role: "assistant", text: "Hi! I can help with compliance insights. Ask: Is this model compliant? What should I fix first? Explain this violation. Summarize structural discipline issues." },
   ]);
@@ -67,6 +70,12 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
       viewer.onModelsChanged = undefined;
     };
   }, [viewer, propertyKey]);
+
+
+  useEffect(() => {
+    if (copilotApiKey.trim()) localStorage.setItem("openai_api_key", copilotApiKey.trim());
+    else localStorage.removeItem("openai_api_key");
+  }, [copilotApiKey]);
 
   const flattenedRows = useMemo(() => {
     if (!selectedItem) return [] as Array<{ key: string; value: string }>;
@@ -185,13 +194,90 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     ].join("\n");
   };
 
-  const handleCopilotAsk = () => {
+  const buildCopilotContext = () => {
+    if (!complianceResult) return "No compliance run has been executed yet.";
+
+    const topRules = [...complianceResult.ruleStats].sort((a, b) => b.failed - a.failed).slice(0, 10);
+    const topClasses = groupedIssues.slice(0, 10).map((group) => `${group.ifcClass}: ${group.issues.length}`);
+
+    return [
+      `Checked: ${complianceResult.checkedElements}`,
+      `Compliant: ${complianceResult.compliantElements}`,
+      `Non-compliant: ${complianceResult.nonCompliantElements}`,
+      `Top rules: ${topRules.map((r) => `${r.ruleName}=${r.failed}`).join(", ")}`,
+      `Issue classes: ${topClasses.join(", ")}`,
+    ].join("\n");
+  };
+
+  const askOpenAI = async (query: string) => {
+    const apiKey = copilotApiKey.trim();
+    if (!apiKey) return null;
+
+    const systemPrompt =
+      "You are an IFC compliance co-pilot. Answer concisely with actionable guidance. Use the provided compliance context only, do not invent model data.";
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: copilotModel,
+        input: [
+          { role: "system", content: [{ type: "text", text: systemPrompt }] },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Compliance context:
+${buildCopilotContext()}
+
+User question: ${query}`,
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return `OpenAI API error (${response.status}): ${errText.slice(0, 300)}`;
+    }
+
+    const data = (await response.json()) as { output_text?: string };
+    return data.output_text?.trim() || "No response returned from OpenAI.";
+  };
+
+  const handleCopilotAsk = async () => {
     const query = copilotQuery.trim();
     if (!query) return;
 
-    const reply = buildCopilotReply(query);
-    setCopilotMessages((prev) => [...prev, { role: "user", text: query }, { role: "assistant", text: reply }]);
+    setCopilotMessages((prev) => [...prev, { role: "user", text: query }]);
     setCopilotQuery("");
+    setCopilotBusy(true);
+
+    try {
+      const openAIReply = await askOpenAI(query);
+      const reply = openAIReply || buildCopilotReply(query);
+      setCopilotMessages((prev) => [...prev, { role: "assistant", text: reply }]);
+    } catch (error) {
+      const localReply = buildCopilotReply(query);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setCopilotMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: `OpenAI request failed (${message}). Falling back to local assistant.
+
+${localReply}`,
+        },
+      ]);
+    } finally {
+      setCopilotBusy(false);
+    }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -539,6 +625,22 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         <em> Explain this violation</em>, <em>Summarize structural discipline issues</em>.
       </div>
 
+      <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
+        <input
+          type="password"
+          value={copilotApiKey}
+          onChange={(e) => setCopilotApiKey(e.target.value)}
+          placeholder="OpenAI API key (stored in browser localStorage)"
+          style={{ padding: "0.4rem" }}
+        />
+        <input
+          value={copilotModel}
+          onChange={(e) => setCopilotModel(e.target.value)}
+          placeholder="OpenAI model (e.g. gpt-4.1-mini)"
+          style={{ padding: "0.4rem" }}
+        />
+      </div>
+
       <div style={{ height: 320, overflow: "auto", border: "1px solid #d7def7", borderRadius: 6, padding: 8, background: "#fff" }}>
         {copilotMessages.map((message, index) => (
           <div key={index} style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>
@@ -555,12 +657,12 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
           value={copilotQuery}
           onChange={(e) => setCopilotQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") handleCopilotAsk();
+            if (e.key === "Enter") void handleCopilotAsk();
           }}
           placeholder="Ask the AI Co-pilot about compliance..."
           style={{ flex: 1, padding: "0.4rem" }}
         />
-        <button onClick={handleCopilotAsk}>Ask</button>
+        <button onClick={() => void handleCopilotAsk()} disabled={copilotBusy}>{copilotBusy ? "Thinking..." : "Ask"}</button>
       </div>
     </div>
   );
