@@ -416,11 +416,19 @@ export class Viewer {
       for (const modelId of this.fragments.list.keys()) {
         if (rule.target?.modelId && rule.target.modelId !== modelId) continue;
 
-        const idsByModel = targetClass
+        let idsByModel = targetClass
           ? await this.getClassIdMap(modelId, targetClass)
           : await this.getModelIdMap(modelId);
 
-        const localIdsSet = idsByModel[modelId] ?? new Set<number>();
+        let localIdsSet = idsByModel[modelId] ?? new Set<number>();
+
+        // Fallback: some models/classifications don't expose the expected IFC class bucket key
+        // (e.g. class naming variations), which would otherwise produce checked=0.
+        // In that case, evaluate all model elements and keep strict per-item class matching below.
+        if (targetClass && localIdsSet.size === 0) {
+          idsByModel = await this.getModelIdMap(modelId);
+          localIdsSet = idsByModel[modelId] ?? new Set<number>();
+        }
         const model = this.fragments.list.get(modelId);
         if (!model) continue;
 
