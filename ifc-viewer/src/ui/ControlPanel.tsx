@@ -1,11 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ModelOverview, Viewer } from "../core/Viewer";
+import { ComplianceDefinition, ComplianceRunResult, ModelOverview, Viewer } from "../core/Viewer";
 
 interface Props {
   viewer: Viewer;
 }
 
 const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
+
+const defaultRuleExample = {
+  project: "Example BEP",
+  version: "1.0",
+  rules: [
+    {
+      id: "wall-fire-rating",
+      name: "Walls must define FireRating",
+      target: { ifcClass: "IFCWALL" },
+      checks: [{ property: "FireRating", operator: "exists" }],
+    },
+  ],
+};
 
 export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [expanded, setExpanded] = useState(false);
@@ -14,6 +27,9 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [models, setModels] = useState<ModelOverview[]>([]);
   const [propertyKey, setPropertyKey] = useState("PredefinedType");
   const [loading, setLoading] = useState(false);
+  const [bepRules, setBepRules] = useState<ComplianceDefinition | null>(null);
+  const [complianceResult, setComplianceResult] = useState<ComplianceRunResult | null>(null);
+  const [qcBusy, setQcBusy] = useState(false);
 
   const refreshModels = async () => {
     setLoading(true);
@@ -76,6 +92,98 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     await refreshModels();
   };
 
+  const handleRulesImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as ComplianceDefinition;
+      if (!Array.isArray(parsed.rules)) {
+        throw new Error("Rules JSON must include a 'rules' array.");
+      }
+      setBepRules(parsed);
+      setComplianceResult(null);
+      alert(`Imported ${parsed.rules.length} BEP rules from ${file.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid JSON file";
+      alert(`Failed to import BEP rules: ${message}`);
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const runComplianceCheck = async () => {
+    if (!bepRules) {
+      alert("Import BEP rules first.");
+      return;
+    }
+
+    setQcBusy(true);
+    try {
+      const result = await viewer.runCompliance(bepRules);
+      setComplianceResult(result);
+      await viewer.highlightComplianceIssues(result.issues);
+    } finally {
+      setQcBusy(false);
+    }
+  };
+
+  const exportComplianceReport = () => {
+    if (!complianceResult) return;
+
+    const allPropertyKeys = Array.from(
+      new Set(complianceResult.issues.flatMap((issue) => Object.keys(issue.elementProperties || {})))
+    ).sort();
+
+    const escapeHtml = (value: string) =>
+      value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+
+    const headerCells = [
+      "Rule ID",
+      "Rule Name",
+      "Model ID",
+      "Model Name",
+      "Local ID",
+      "IFC Class",
+      "Failed Checks",
+      ...allPropertyKeys,
+    ]
+      .map((h) => `<th>${escapeHtml(h)}</th>`)
+      .join("");
+
+    const rows = complianceResult.issues
+      .map((issue) => {
+        const base = [
+          issue.ruleId,
+          issue.ruleName,
+          issue.modelId,
+          issue.modelName,
+          String(issue.localId),
+          issue.ifcClass ?? "",
+          issue.failedChecks.join(" | "),
+        ];
+
+        const propertyValues = allPropertyKeys.map((key) => issue.elementProperties?.[key] ?? "");
+        return [...base, ...propertyValues].map((value) => `<td>${escapeHtml(String(value ?? ""))}</td>`).join("");
+      })
+      .map((cells) => `<tr>${cells}</tr>`)
+      .join("");
+
+    const workbookHtml = `﻿<html><head><meta charset="utf-8" /></head><body><table border="1"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+
+    const blob = new Blob([workbookHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `compliance-report-${new Date().toISOString().replace(/[:.]/g, "-")}.xls`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
   const copyTSV = async () => {
     if (!flattenedRows.length) return;
     const tsv = ["Property\tValue", ...flattenedRows.map((row) => `${row.key}\t${row.value}`)].join("\n");
@@ -102,6 +210,65 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     >
       <div>
         <input type="file" accept=".ifc" multiple onChange={handleFileChange} style={{ width: "100%" }} />
+      </div>
+
+      <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#f8f9fe" }}>
+        <h3 style={{ margin: "0 0 8px" }}>Quality Control</h3>
+        <div style={{ display: "grid", gap: 6 }}>
+          <input type="file" accept=".json" onChange={handleRulesImport} />
+          <small>
+            BEP JSON imported: <strong>{bepRules?.rules.length ?? 0}</strong> rules
+          </small>
+          <button onClick={runComplianceCheck} disabled={!bepRules || qcBusy}>
+            {qcBusy ? "Running compliance..." : "Run Automated Compliance Check"}
+          </button>
+          <button onClick={() => void viewer.resetColors()} disabled={qcBusy}>
+            Clear Non-compliant Highlighting
+          </button>
+          <button onClick={exportComplianceReport} disabled={!complianceResult}>
+            Export Compliance Report
+          </button>
+          {!bepRules && <small>Use a BEP rules JSON file. Example: {JSON.stringify(defaultRuleExample)}</small>}
+        </div>
+
+        {complianceResult && (
+          <div style={{ marginTop: 10, borderTop: "1px dashed #c3c8d8", paddingTop: 8, fontSize: 13 }}>
+            <strong>Compliance Dashboard</strong>
+            <div>Checked elements: {complianceResult.checkedElements}</div>
+            <div>Compliant: {complianceResult.compliantElements}</div>
+            <div style={{ color: "#b0172b", fontWeight: 700 }}>Non-compliant: {complianceResult.nonCompliantElements}</div>
+
+            <details style={{ marginTop: 6 }}>
+              <summary>Per Rule</summary>
+              {complianceResult.ruleStats.map((rule) => (
+                <div key={rule.ruleId} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6 }}>
+                  <span>{rule.ruleName}</span>
+                  <span>checked {rule.checked}</span>
+                  <span style={{ color: rule.failed ? "#b0172b" : "#0c7a32" }}>failed {rule.failed}</span>
+                </div>
+              ))}
+            </details>
+
+            <details style={{ marginTop: 6 }}>
+              <summary>Issue List ({complianceResult.issues.length})</summary>
+              {complianceResult.issues.slice(0, 50).map((issue, index) => (
+                <div
+                  key={`${issue.ruleId}-${issue.modelId}-${issue.localId}-${index}`}
+                  style={{ marginTop: 6, border: "1px solid #ddd", borderRadius: 6, padding: 6 }}
+                >
+                  <div>
+                    {issue.modelName} #{issue.localId} — {issue.ruleName}
+                  </div>
+                  <small style={{ display: "block", marginTop: 2 }}>{issue.failedChecks.join("; ")}</small>
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button onClick={() => void viewer.isolateElement(issue.modelId, issue.localId)}>Isolate</button>
+                    <button onClick={() => void viewer.colorElement(issue.modelId, issue.localId, randomColor())}>Color</button>
+                  </div>
+                </div>
+              ))}
+            </details>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
