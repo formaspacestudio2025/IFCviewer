@@ -5,7 +5,7 @@ interface Props {
   viewer: Viewer;
 }
 
-type PanelTab = "upload" | "models" | "properties" | "quality";
+type PanelTab = "upload" | "models" | "properties" | "quality" | "copilot";
 
 const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
 
@@ -34,6 +34,10 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [complianceResult, setComplianceResult] = useState<ComplianceRunResult | null>(null);
   const [qcBusy, setQcBusy] = useState(false);
   const [nonComplianceColor, setNonComplianceColor] = useState("#d11a2a");
+  const [copilotQuery, setCopilotQuery] = useState("");
+  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([
+    { role: "assistant", text: "Hi! I can help with compliance insights. Ask: Is this model compliant? What should I fix first? Explain this violation. Summarize structural discipline issues." },
+  ]);
 
   const refreshModels = async () => {
     setLoading(true);
@@ -103,6 +107,92 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
 
   const toElementRefs = (issues: ComplianceRunResult["issues"]) =>
     issues.map((issue) => ({ modelId: issue.modelId, localId: issue.localId }));
+
+
+
+  const findIssueForQuery = (query: string) => {
+    if (!complianceResult?.issues.length) return null;
+
+    const localIdMatch = query.match(/#?(\d{1,9})/);
+    if (localIdMatch) {
+      const byId = complianceResult.issues.find((issue) => issue.localId === Number(localIdMatch[1]));
+      if (byId) return byId;
+    }
+
+    const normalized = query.toLowerCase();
+    return complianceResult.issues.find((issue) => {
+      return (
+        issue.ruleId.toLowerCase().includes(normalized) ||
+        issue.ruleName.toLowerCase().includes(normalized) ||
+        `${issue.ifcClass ?? ""}`.toLowerCase().includes(normalized)
+      );
+    });
+  };
+
+  const buildCopilotReply = (query: string) => {
+    if (!complianceResult) {
+      return "Run a compliance check first, then I can analyze issues and prioritize fixes.";
+    }
+
+    const q = query.toLowerCase();
+    const { checkedElements, nonCompliantElements, compliantElements, issues, ruleStats } = complianceResult;
+
+    if (q.includes("compliant") || q.includes("compliance status")) {
+      const percent = checkedElements ? ((compliantElements / checkedElements) * 100).toFixed(1) : "0.0";
+      return `Current status: ${compliantElements}/${checkedElements} elements compliant (${percent}%). Non-compliant elements: ${nonCompliantElements}.`;
+    }
+
+    if (q.includes("fix first") || q.includes("priority") || q.includes("prioritize")) {
+      if (!issues.length) return "Great news: no non-compliant elements found. Nothing to prioritize right now.";
+      const topRules = [...ruleStats].sort((a, b) => b.failed - a.failed).filter((r) => r.failed > 0).slice(0, 3);
+      const topText = topRules.map((r, i) => `${i + 1}. ${r.ruleName} (${r.failed} failed)`).join("\n");
+      return `Fix these first based on failure volume:\n${topText}`;
+    }
+
+    if (q.includes("explain") || q.includes("violation")) {
+      const issue = findIssueForQuery(query) ?? issues[0];
+      if (!issue) return "I could not find a violation because current results have no issues.";
+      return [
+        `Violation explanation for ${issue.modelName} #${issue.localId}:`,
+        `- IFC Class: ${issue.ifcClass ?? "Unknown"}`,
+        `- Failed rule: ${issue.ruleName} (${issue.ruleId})`,
+        `- Failed checks: ${issue.failedChecks.join("; ")}`,
+        "Suggested action: open this element in Properties tab, populate missing/invalid values, and rerun compliance.",
+      ].join("\n");
+    }
+
+    if (q.includes("structural") || q.includes("discipline")) {
+      const structuralClasses = ["IFCBEAM", "IFCCOLUMN", "IFCSLAB", "IFCWALL", "IFCFOOTING", "IFCPILE", "IFCMEMBER", "IFCPLATE", "IFCROOF", "IFCSTAIR"];
+      const structuralIssues = issues.filter((issue) => structuralClasses.includes((issue.ifcClass ?? "").toUpperCase()));
+      if (!structuralIssues.length) return "No structural-discipline issues detected in the current non-compliance set.";
+
+      const counts = new Map<string, number>();
+      for (const issue of structuralIssues) {
+        const key = (issue.ifcClass || "UNCLASSIFIED").toUpperCase();
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      const lines = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `- ${k}: ${v} issues`);
+      return `Structural discipline summary (${structuralIssues.length} issues):\n${lines.join("\n")}`;
+    }
+
+    return [
+      "I can help with:",
+      "- compliance status",
+      "- fix-first prioritization",
+      "- violation explanations",
+      "- structural discipline summaries",
+      "Try: 'What should I fix first?'",
+    ].join("\n");
+  };
+
+  const handleCopilotAsk = () => {
+    const query = copilotQuery.trim();
+    if (!query) return;
+
+    const reply = buildCopilotReply(query);
+    setCopilotMessages((prev) => [...prev, { role: "user", text: query }, { role: "assistant", text: reply }]);
+    setCopilotQuery("");
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
@@ -439,11 +529,48 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     </div>
   );
 
+
+
+  const renderCopilotTab = () => (
+    <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#f5f8ff" }}>
+      <h3 style={{ margin: "0 0 8px" }}>AI Co-pilot</h3>
+      <div style={{ fontSize: 12, color: "#4a5575", marginBottom: 8 }}>
+        Ask things like: <em>Is this model compliant?</em>, <em>What should I fix first?</em>,
+        <em> Explain this violation</em>, <em>Summarize structural discipline issues</em>.
+      </div>
+
+      <div style={{ height: 320, overflow: "auto", border: "1px solid #d7def7", borderRadius: 6, padding: 8, background: "#fff" }}>
+        {copilotMessages.map((message, index) => (
+          <div key={index} style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>
+            <strong style={{ color: message.role === "assistant" ? "#2d3a68" : "#7a2d2d" }}>
+              {message.role === "assistant" ? "Co-pilot" : "You"}:
+            </strong>{" "}
+            {message.text}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <input
+          value={copilotQuery}
+          onChange={(e) => setCopilotQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleCopilotAsk();
+          }}
+          placeholder="Ask the AI Co-pilot about compliance..."
+          style={{ flex: 1, padding: "0.4rem" }}
+        />
+        <button onClick={handleCopilotAsk}>Ask</button>
+      </div>
+    </div>
+  );
+
   const tabs: Array<{ key: PanelTab; label: string }> = [
     { key: "upload", label: "Model Upload" },
     { key: "models", label: "Uploaded Models" },
     { key: "properties", label: "Properties" },
     { key: "quality", label: "Quality Check" },
+    { key: "copilot", label: "AI Co-pilot" },
   ];
 
   return (
@@ -463,7 +590,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         gap: "0.75rem",
       }}
     >
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 4 }}>
         {tabs.map((tab) => (
           <button
             key={tab.key}
@@ -485,6 +612,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
       {activeTab === "models" && renderModelsTab()}
       {activeTab === "properties" && renderPropertiesTab()}
       {activeTab === "quality" && renderQualityTab()}
+      {activeTab === "copilot" && renderCopilotTab()}
     </div>
   );
 };
