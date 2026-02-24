@@ -132,17 +132,54 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const exportComplianceReport = () => {
     if (!complianceResult) return;
 
-    const payload = {
-      project: bepRules?.project,
-      version: bepRules?.version,
-      ruleCount: bepRules?.rules.length ?? 0,
-      ...complianceResult,
-    };
+    const allPropertyKeys = Array.from(
+      new Set(complianceResult.issues.flatMap((issue) => Object.keys(issue.elementProperties || {})))
+    ).sort();
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const escapeHtml = (value: string) =>
+      value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+
+    const headerCells = [
+      "Rule ID",
+      "Rule Name",
+      "Model ID",
+      "Model Name",
+      "Local ID",
+      "IFC Class",
+      "Failed Checks",
+      ...allPropertyKeys,
+    ]
+      .map((h) => `<th>${escapeHtml(h)}</th>`)
+      .join("");
+
+    const rows = complianceResult.issues
+      .map((issue) => {
+        const base = [
+          issue.ruleId,
+          issue.ruleName,
+          issue.modelId,
+          issue.modelName,
+          String(issue.localId),
+          issue.ifcClass ?? "",
+          issue.failedChecks.join(" | "),
+        ];
+
+        const propertyValues = allPropertyKeys.map((key) => issue.elementProperties?.[key] ?? "");
+        return [...base, ...propertyValues].map((value) => `<td>${escapeHtml(String(value ?? ""))}</td>`).join("");
+      })
+      .map((cells) => `<tr>${cells}</tr>`)
+      .join("");
+
+    const workbookHtml = `﻿<html><head><meta charset="utf-8" /></head><body><table border="1"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+
+    const blob = new Blob([workbookHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `compliance-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.download = `compliance-report-${new Date().toISOString().replace(/[:.]/g, "-")}.xls`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -213,13 +250,20 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
             </details>
 
             <details style={{ marginTop: 6 }}>
-              <summary>Top Issues ({complianceResult.issues.length})</summary>
-              {complianceResult.issues.slice(0, 20).map((issue, index) => (
-                <div key={`${issue.ruleId}-${issue.modelId}-${issue.localId}-${index}`} style={{ marginTop: 6 }}>
+              <summary>Issue List ({complianceResult.issues.length})</summary>
+              {complianceResult.issues.slice(0, 50).map((issue, index) => (
+                <div
+                  key={`${issue.ruleId}-${issue.modelId}-${issue.localId}-${index}`}
+                  style={{ marginTop: 6, border: "1px solid #ddd", borderRadius: 6, padding: 6 }}
+                >
                   <div>
                     {issue.modelName} #{issue.localId} — {issue.ruleName}
                   </div>
-                  <small>{issue.failedChecks.join("; ")}</small>
+                  <small style={{ display: "block", marginTop: 2 }}>{issue.failedChecks.join("; ")}</small>
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button onClick={() => void viewer.isolateElement(issue.modelId, issue.localId)}>Isolate</button>
+                    <button onClick={() => void viewer.colorElement(issue.modelId, issue.localId, randomColor())}>Color</button>
+                  </div>
                 </div>
               ))}
             </details>

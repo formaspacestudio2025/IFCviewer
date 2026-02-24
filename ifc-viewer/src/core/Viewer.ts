@@ -61,6 +61,7 @@ export interface ComplianceIssue {
   localId: number;
   ifcClass?: string;
   failedChecks: string[];
+  elementProperties: Record<string, string>;
 }
 
 export interface ComplianceRunResult {
@@ -383,6 +384,19 @@ export class Viewer {
     return chunks;
   }
 
+  private flattenItemProperties(item: Record<string, any>): Record<string, string> {
+    const flattened: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(item)) {
+      if (key.startsWith("__")) continue;
+      const normalized = this.getValue(value);
+      if (normalized === null) continue;
+      flattened[key] = typeof normalized === "string" ? normalized : String(normalized);
+    }
+
+    return flattened;
+  }
+
   public async runCompliance(definition: ComplianceDefinition): Promise<ComplianceRunResult> {
     await this.ensureReady();
     await this.refreshClassifications();
@@ -440,6 +454,7 @@ export class Viewer {
                 localId,
                 ifcClass: String(this.getValue(item.EntityName) ?? this.getValue(item.ifcClass) ?? rule.target?.ifcClass ?? ""),
                 failedChecks: failingChecks,
+                elementProperties: this.flattenItemProperties(item),
               });
 
               const modelStat = modelStats.get(modelId) ?? { modelName, checked: 0, nonCompliant: 0 };
@@ -608,6 +623,18 @@ export class Viewer {
   public async resetColors() {
     await this.ensureReady();
     await this.fragments.resetHighlight();
+  }
+
+  public async isolateElement(modelId: string, localId: number) {
+    await this.ensureReady();
+    await this.hider.isolate({ [modelId]: new Set([localId]) });
+  }
+
+  public async colorElement(modelId: string, localId: number, color: string) {
+    await this.ensureReady();
+    await this.fragments.highlight({ color: new Color(color), opacity: 1, transparent: false } as any, {
+      [modelId]: new Set([localId]),
+    });
   }
 
   public async showAll() {
