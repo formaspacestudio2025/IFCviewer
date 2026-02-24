@@ -402,6 +402,7 @@ export class Viewer {
     await this.refreshClassifications();
 
     const issues: ComplianceIssue[] = [];
+    const issueKeys = new Set<string>();
     const checkedByElement = new Set<string>();
     const nonCompliantByElement = new Set<string>();
     const modelStats = new Map<string, { modelName: string; checked: number; nonCompliant: number }>();
@@ -431,7 +432,7 @@ export class Viewer {
             const localId = Number(rawLocalId);
             if (Number.isNaN(localId)) continue;
 
-            if (!targetClass && !this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
+            if (!this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
 
             const elementKey = `${modelId}:${localId}`;
             checkedByElement.add(elementKey);
@@ -444,6 +445,10 @@ export class Viewer {
             if (currentRuleStats) currentRuleStats.checked += 1;
 
             if (failingChecks.length) {
+              const issueKey = `${rule.id}|${modelId}|${localId}`;
+              if (issueKeys.has(issueKey)) continue;
+              issueKeys.add(issueKey);
+
               nonCompliantByElement.add(elementKey);
               const modelName = this.modelNames.get(modelId) ?? modelId;
               issues.push({
