@@ -630,11 +630,34 @@ export class Viewer {
     await this.hider.isolate({ [modelId]: new Set([localId]) });
   }
 
+  private buildModelIdMap(elements: Array<{ modelId: string; localId: number }>) {
+    const idsByModel: Record<string, Set<number>> = {};
+    for (const element of elements) {
+      if (!idsByModel[element.modelId]) idsByModel[element.modelId] = new Set<number>();
+      idsByModel[element.modelId].add(element.localId);
+    }
+    return idsByModel;
+  }
+
+  public async isolateElements(elements: Array<{ modelId: string; localId: number }>) {
+    await this.ensureReady();
+    const idsByModel = this.buildModelIdMap(elements);
+    if (!Object.keys(idsByModel).length) return;
+    await this.hider.isolate(idsByModel);
+  }
+
   public async colorElement(modelId: string, localId: number, color: string) {
     await this.ensureReady();
     await this.fragments.highlight({ color: new Color(color), opacity: 1, transparent: false } as any, {
       [modelId]: new Set([localId]),
     });
+  }
+
+  public async colorElements(elements: Array<{ modelId: string; localId: number }>, color: string) {
+    await this.ensureReady();
+    const idsByModel = this.buildModelIdMap(elements);
+    if (!Object.keys(idsByModel).length) return;
+    await this.fragments.highlight({ color: new Color(color), opacity: 1, transparent: false } as any, idsByModel);
   }
 
   public async showAll() {

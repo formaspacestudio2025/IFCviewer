@@ -30,6 +30,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [bepRules, setBepRules] = useState<ComplianceDefinition | null>(null);
   const [complianceResult, setComplianceResult] = useState<ComplianceRunResult | null>(null);
   const [qcBusy, setQcBusy] = useState(false);
+  const [nonComplianceColor, setNonComplianceColor] = useState("#d11a2a");
 
   const refreshModels = async () => {
     setLoading(true);
@@ -191,6 +192,23 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     alert("Copied properties as TSV!");
   };
 
+  const groupedIssues = useMemo(() => {
+    const groups = new Map<string, ComplianceRunResult["issues"]>();
+    for (const issue of complianceResult?.issues ?? []) {
+      const key = issue.ifcClass?.trim() || "UNCLASSIFIED";
+      const group = groups.get(key) ?? [];
+      group.push(issue);
+      groups.set(key, group);
+    }
+
+    return [...groups.entries()]
+      .map(([ifcClass, issues]) => ({ ifcClass, issues }))
+      .sort((a, b) => b.issues.length - a.issues.length);
+  }, [complianceResult]);
+
+  const toElementRefs = (issues: ComplianceRunResult["issues"]) =>
+    issues.map((issue) => ({ modelId: issue.modelId, localId: issue.localId }));
+
   return (
     <div
       style={{
@@ -208,8 +226,17 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         gap: "0.75rem",
       }}
     >
-      <div>
+      <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#f6f9ff" }}>
+        <h3 style={{ margin: "0 0 8px" }}>Model Upload & View Controls</h3>
         <input type="file" accept=".ifc" multiple onChange={handleFileChange} style={{ width: "100%" }} />
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button style={{ flex: 1 }} onClick={() => void viewer.showAll()}>
+            Show All
+          </button>
+          <button style={{ flex: 1 }} onClick={() => void viewer.resetColors()}>
+            Reset Colors
+          </button>
+        </div>
       </div>
 
       <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#f8f9fe" }}>
@@ -251,33 +278,60 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
 
             <details style={{ marginTop: 6 }}>
               <summary>Issue List ({complianceResult.issues.length})</summary>
-              {complianceResult.issues.slice(0, 50).map((issue, index) => (
-                <div
-                  key={`${issue.ruleId}-${issue.modelId}-${issue.localId}-${index}`}
-                  style={{ marginTop: 6, border: "1px solid #ddd", borderRadius: 6, padding: 6 }}
-                >
-                  <div>
-                    {issue.modelName} #{issue.localId} — {issue.ruleName}
-                  </div>
-                  <small style={{ display: "block", marginTop: 2 }}>{issue.failedChecks.join("; ")}</small>
-                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                    <button onClick={() => void viewer.isolateElement(issue.modelId, issue.localId)}>Isolate</button>
-                    <button onClick={() => void viewer.colorElement(issue.modelId, issue.localId, randomColor())}>Color</button>
-                  </div>
+              <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <label>
+                    Color
+                    <input
+                      type="color"
+                      value={nonComplianceColor}
+                      onChange={(e) => setNonComplianceColor(e.target.value)}
+                      style={{ marginLeft: 6, verticalAlign: "middle" }}
+                    />
+                  </label>
+                  <button onClick={() => void viewer.isolateElements(toElementRefs(complianceResult.issues))}>
+                    Isolate All Non-compliant
+                  </button>
+                  <button onClick={() => void viewer.colorElements(toElementRefs(complianceResult.issues), nonComplianceColor)}>
+                    Color All Non-compliant
+                  </button>
                 </div>
-              ))}
+
+                {groupedIssues.map((group) => (
+                  <details key={group.ifcClass} open>
+                    <summary>
+                      {group.ifcClass} ({group.issues.length})
+                    </summary>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={() => void viewer.isolateElements(toElementRefs(group.issues))}>Isolate Class Issues</button>
+                      <button onClick={() => void viewer.colorElements(toElementRefs(group.issues), nonComplianceColor)}>
+                        Color Class Issues
+                      </button>
+                    </div>
+
+                    {group.issues.slice(0, 25).map((issue, index) => (
+                      <div
+                        key={`${issue.ruleId}-${issue.modelId}-${issue.localId}-${index}`}
+                        style={{ marginTop: 6, border: "1px solid #ddd", borderRadius: 6, padding: 6 }}
+                      >
+                        <div>
+                          {issue.modelName} #{issue.localId} — {issue.ruleName}
+                        </div>
+                        <small style={{ display: "block", marginTop: 2 }}>{issue.failedChecks.join("; ")}</small>
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <button onClick={() => void viewer.isolateElement(issue.modelId, issue.localId)}>Isolate</button>
+                          <button onClick={() => void viewer.colorElement(issue.modelId, issue.localId, nonComplianceColor)}>
+                            Color
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </details>
+                ))}
+              </div>
             </details>
           </div>
         )}
-      </div>
-
-      <div style={{ display: "flex", gap: 8 }}>
-        <button style={{ flex: 1 }} onClick={() => void viewer.showAll()}>
-          Show All
-        </button>
-        <button style={{ flex: 1 }} onClick={() => void viewer.resetColors()}>
-          Reset Colors
-        </button>
       </div>
 
       <div style={{ borderTop: "1px solid #ddd", paddingTop: 8 }}>
@@ -344,7 +398,8 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         ))}
       </div>
 
-      <bim-panel label="Properties">
+      <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#fffdf7" }}>
+        <h3 style={{ margin: "0 0 8px" }}>Property Check</h3>
         <bim-panel-section style={{ minHeight: "300px" }} label="Selected Element Data">
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: 8 }}>
             <button onClick={() => setExpanded((prev) => !prev)}>{expanded ? "Collapse" : "Expand"}</button>
@@ -390,7 +445,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
             )}
           </div>
         </bim-panel-section>
-      </bim-panel>
+      </div>
     </div>
   );
 };
