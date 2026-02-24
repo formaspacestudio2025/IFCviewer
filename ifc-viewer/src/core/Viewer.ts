@@ -338,6 +338,8 @@ export class Viewer {
 
   private evaluateCondition(item: Record<string, any>, condition: ComplianceCondition): boolean {
     const rawValue = this.getValue(this.getItemPropertyRaw(item, condition.property));
+  private evaluateCondition(item: Record<string, any>, condition: ComplianceCondition): boolean {
+    const rawValue = this.getValue(item[condition.property]);
 
     switch (condition.operator) {
       case "exists":
@@ -399,6 +401,9 @@ export class Viewer {
         : Object.fromEntries(
             [...this.fragments.list.keys()].map((modelId) => [modelId, this.classifier.list.get("Models")?.get(modelId) ?? new Set<number>()])
           );
+      if (rule.target?.ifcClass) filter["IFC Classes"] = [rule.target.ifcClass];
+
+      const idsByModel = Object.keys(filter).length ? await this.classifier.find(filter) : await this.classifier.find({ Models: [/.*/ as any] });
 
       for (const [modelId, localIdsSet] of Object.entries(idsByModel)) {
         const model = this.fragments.list.get(modelId);
