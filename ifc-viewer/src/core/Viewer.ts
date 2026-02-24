@@ -227,6 +227,12 @@ export class Viewer {
   private setupStats() {
     this.stats = new Stats();
     this.stats.showPanel(2);
+    this.stats.dom.style.position = "fixed";
+    this.stats.dom.style.right = "10px";
+    this.stats.dom.style.bottom = "10px";
+    this.stats.dom.style.left = "auto";
+    this.stats.dom.style.top = "auto";
+    this.stats.dom.style.zIndex = "20";
     document.body.append(this.stats.dom);
 
     this.world.renderer?.onBeforeUpdate.add(() => this.stats.begin());
