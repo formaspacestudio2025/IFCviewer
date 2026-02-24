@@ -1,11 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ModelOverview, Viewer } from "../core/Viewer";
+import { ComplianceDefinition, ComplianceRunResult, ModelOverview, Viewer } from "../core/Viewer";
 
 interface Props {
   viewer: Viewer;
 }
 
 const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
+
+const defaultRuleExample = {
+  project: "Example BEP",
+  version: "1.0",
+  rules: [
+    {
+      id: "wall-fire-rating",
+      name: "Walls must define FireRating",
+      target: { ifcClass: "IFCWALL" },
+      checks: [{ property: "FireRating", operator: "exists" }],
+    },
+  ],
+};
 
 export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [expanded, setExpanded] = useState(false);
@@ -14,6 +27,10 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
   const [models, setModels] = useState<ModelOverview[]>([]);
   const [propertyKey, setPropertyKey] = useState("PredefinedType");
   const [loading, setLoading] = useState(false);
+  const [bepRules, setBepRules] = useState<ComplianceDefinition | null>(null);
+  const [complianceResult, setComplianceResult] = useState<ComplianceRunResult | null>(null);
+  const [qcBusy, setQcBusy] = useState(false);
+  const [nonComplianceColor, setNonComplianceColor] = useState("#d11a2a");
 
   const refreshModels = async () => {
     setLoading(true);
@@ -76,12 +93,121 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
     await refreshModels();
   };
 
+  const handleRulesImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as ComplianceDefinition;
+      if (!Array.isArray(parsed.rules)) {
+        throw new Error("Rules JSON must include a 'rules' array.");
+      }
+      setBepRules(parsed);
+      setComplianceResult(null);
+      alert(`Imported ${parsed.rules.length} BEP rules from ${file.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid JSON file";
+      alert(`Failed to import BEP rules: ${message}`);
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const runComplianceCheck = async () => {
+    if (!bepRules) {
+      alert("Import BEP rules first.");
+      return;
+    }
+
+    setQcBusy(true);
+    try {
+      const result = await viewer.runCompliance(bepRules);
+      setComplianceResult(result);
+      await viewer.highlightComplianceIssues(result.issues);
+    } finally {
+      setQcBusy(false);
+    }
+  };
+
+  const exportComplianceReport = () => {
+    if (!complianceResult) return;
+
+    const allPropertyKeys = Array.from(
+      new Set(complianceResult.issues.flatMap((issue) => Object.keys(issue.elementProperties || {})))
+    ).sort();
+
+    const escapeHtml = (value: string) =>
+      value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+
+    const headerCells = [
+      "Rule ID",
+      "Rule Name",
+      "Model ID",
+      "Model Name",
+      "Local ID",
+      "IFC Class",
+      "Failed Checks",
+      ...allPropertyKeys,
+    ]
+      .map((h) => `<th>${escapeHtml(h)}</th>`)
+      .join("");
+
+    const rows = complianceResult.issues
+      .map((issue) => {
+        const base = [
+          issue.ruleId,
+          issue.ruleName,
+          issue.modelId,
+          issue.modelName,
+          String(issue.localId),
+          issue.ifcClass ?? "",
+          issue.failedChecks.join(" | "),
+        ];
+
+        const propertyValues = allPropertyKeys.map((key) => issue.elementProperties?.[key] ?? "");
+        return [...base, ...propertyValues].map((value) => `<td>${escapeHtml(String(value ?? ""))}</td>`).join("");
+      })
+      .map((cells) => `<tr>${cells}</tr>`)
+      .join("");
+
+    const workbookHtml = `﻿<html><head><meta charset="utf-8" /></head><body><table border="1"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+
+    const blob = new Blob([workbookHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `compliance-report-${new Date().toISOString().replace(/[:.]/g, "-")}.xls`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
   const copyTSV = async () => {
     if (!flattenedRows.length) return;
     const tsv = ["Property\tValue", ...flattenedRows.map((row) => `${row.key}\t${row.value}`)].join("\n");
     await navigator.clipboard.writeText(tsv);
     alert("Copied properties as TSV!");
   };
+
+  const groupedIssues = useMemo(() => {
+    const groups = new Map<string, ComplianceRunResult["issues"]>();
+    for (const issue of complianceResult?.issues ?? []) {
+      const key = issue.ifcClass?.trim() || "UNCLASSIFIED";
+      const group = groups.get(key) ?? [];
+      group.push(issue);
+      groups.set(key, group);
+    }
+
+    return [...groups.entries()]
+      .map(([ifcClass, issues]) => ({ ifcClass, issues }))
+      .sort((a, b) => b.issues.length - a.issues.length);
+  }, [complianceResult]);
+
+  const toElementRefs = (issues: ComplianceRunResult["issues"]) =>
+    issues.map((issue) => ({ modelId: issue.modelId, localId: issue.localId }));
 
   return (
     <div
@@ -100,17 +226,112 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         gap: "0.75rem",
       }}
     >
-      <div>
+      <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#f6f9ff" }}>
+        <h3 style={{ margin: "0 0 8px" }}>Model Upload & View Controls</h3>
         <input type="file" accept=".ifc" multiple onChange={handleFileChange} style={{ width: "100%" }} />
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button style={{ flex: 1 }} onClick={() => void viewer.showAll()}>
+            Show All
+          </button>
+          <button style={{ flex: 1 }} onClick={() => void viewer.resetColors()}>
+            Reset Colors
+          </button>
+        </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <button style={{ flex: 1 }} onClick={() => void viewer.showAll()}>
-          Show All
-        </button>
-        <button style={{ flex: 1 }} onClick={() => void viewer.resetColors()}>
-          Reset Colors
-        </button>
+      <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#f8f9fe" }}>
+        <h3 style={{ margin: "0 0 8px" }}>Quality Control</h3>
+        <div style={{ display: "grid", gap: 6 }}>
+          <input type="file" accept=".json" onChange={handleRulesImport} />
+          <small>
+            BEP JSON imported: <strong>{bepRules?.rules.length ?? 0}</strong> rules
+          </small>
+          <button onClick={runComplianceCheck} disabled={!bepRules || qcBusy}>
+            {qcBusy ? "Running compliance..." : "Run Automated Compliance Check"}
+          </button>
+          <button onClick={() => void viewer.resetColors()} disabled={qcBusy}>
+            Clear Non-compliant Highlighting
+          </button>
+          <button onClick={exportComplianceReport} disabled={!complianceResult}>
+            Export Compliance Report
+          </button>
+          {!bepRules && <small>Use a BEP rules JSON file. Example: {JSON.stringify(defaultRuleExample)}</small>}
+        </div>
+
+        {complianceResult && (
+          <div style={{ marginTop: 10, borderTop: "1px dashed #c3c8d8", paddingTop: 8, fontSize: 13 }}>
+            <strong>Compliance Dashboard</strong>
+            <div>Checked elements: {complianceResult.checkedElements}</div>
+            <div>Compliant: {complianceResult.compliantElements}</div>
+            <div style={{ color: "#b0172b", fontWeight: 700 }}>Non-compliant: {complianceResult.nonCompliantElements}</div>
+
+            <details style={{ marginTop: 6 }}>
+              <summary>Per Rule</summary>
+              {complianceResult.ruleStats.map((rule) => (
+                <div key={rule.ruleId} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6 }}>
+                  <span>{rule.ruleName}</span>
+                  <span>checked {rule.checked}</span>
+                  <span style={{ color: rule.failed ? "#b0172b" : "#0c7a32" }}>failed {rule.failed}</span>
+                </div>
+              ))}
+            </details>
+
+            <details style={{ marginTop: 6 }}>
+              <summary>Issue List ({complianceResult.issues.length})</summary>
+              <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <label>
+                    Color
+                    <input
+                      type="color"
+                      value={nonComplianceColor}
+                      onChange={(e) => setNonComplianceColor(e.target.value)}
+                      style={{ marginLeft: 6, verticalAlign: "middle" }}
+                    />
+                  </label>
+                  <button onClick={() => void viewer.isolateElements(toElementRefs(complianceResult.issues))}>
+                    Isolate All Non-compliant
+                  </button>
+                  <button onClick={() => void viewer.colorElements(toElementRefs(complianceResult.issues), nonComplianceColor)}>
+                    Color All Non-compliant
+                  </button>
+                </div>
+
+                {groupedIssues.map((group) => (
+                  <details key={group.ifcClass} open>
+                    <summary>
+                      {group.ifcClass} ({group.issues.length})
+                    </summary>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={() => void viewer.isolateElements(toElementRefs(group.issues))}>Isolate Class Issues</button>
+                      <button onClick={() => void viewer.colorElements(toElementRefs(group.issues), nonComplianceColor)}>
+                        Color Class Issues
+                      </button>
+                    </div>
+
+                    {group.issues.slice(0, 25).map((issue, index) => (
+                      <div
+                        key={`${issue.ruleId}-${issue.modelId}-${issue.localId}-${index}`}
+                        style={{ marginTop: 6, border: "1px solid #ddd", borderRadius: 6, padding: 6 }}
+                      >
+                        <div>
+                          {issue.modelName} #{issue.localId} — {issue.ruleName}
+                        </div>
+                        <small style={{ display: "block", marginTop: 2 }}>{issue.failedChecks.join("; ")}</small>
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <button onClick={() => void viewer.isolateElement(issue.modelId, issue.localId)}>Isolate</button>
+                          <button onClick={() => void viewer.colorElement(issue.modelId, issue.localId, nonComplianceColor)}>
+                            Color
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </details>
+                ))}
+              </div>
+            </details>
+          </div>
+        )}
       </div>
 
       <div style={{ borderTop: "1px solid #ddd", paddingTop: 8 }}>
@@ -177,7 +398,8 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
         ))}
       </div>
 
-      <bim-panel label="Properties">
+      <div style={{ border: "1px solid #d3d7e5", borderRadius: 8, padding: 10, background: "#fffdf7" }}>
+        <h3 style={{ margin: "0 0 8px" }}>Property Check</h3>
         <bim-panel-section style={{ minHeight: "300px" }} label="Selected Element Data">
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: 8 }}>
             <button onClick={() => setExpanded((prev) => !prev)}>{expanded ? "Collapse" : "Expand"}</button>
@@ -223,7 +445,7 @@ export const ControlPanel: React.FC<Props> = ({ viewer }) => {
             )}
           </div>
         </bim-panel-section>
-      </bim-panel>
+      </div>
     </div>
   );
 };
