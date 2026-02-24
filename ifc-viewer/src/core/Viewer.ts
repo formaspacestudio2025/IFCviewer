@@ -28,7 +28,7 @@ export interface ModelOverview {
   propertyGroups: ModelGroupInfo[];
 }
 
-export type RuleOperator = "exists" | "equals" | "notEquals" | "in" | "regex" | "gt" | "gte" | "lt" | "lte";
+export type RuleOperator = "exists" | "notEmpty" | "equals" | "notEquals" | "in" | "regex" | "gt" | "gte" | "lt" | "lte";
 
 export interface ComplianceCondition {
   property: string;
@@ -296,13 +296,14 @@ export class Viewer {
     if (propertyName in item) return item[propertyName];
 
     const normalized = propertyName.trim().toLowerCase();
+    const normalizedWithoutUnderscore = normalized.startsWith("_") ? normalized.slice(1) : normalized;
     let aliases: string[] = [];
 
-    if (normalized === "guid" || normalized === "globalid") {
+    if (normalizedWithoutUnderscore === "guid" || normalizedWithoutUnderscore === "globalid") {
       aliases = ["GlobalId", "globalId", "GUID"];
-    } else if (normalized === "ifcclass" || normalized === "classname") {
+    } else if (normalizedWithoutUnderscore === "ifcclass" || normalizedWithoutUnderscore === "classname") {
       aliases = ["EntityName", "entityName", "Class"];
-    } else if (normalized === "class") {
+    } else if (normalizedWithoutUnderscore === "class") {
       aliases = ["EntityName", "entityName", "ifcClass"];
     }
 
@@ -312,6 +313,7 @@ export class Viewer {
 
     for (const [key, value] of Object.entries(item)) {
       if (key.toLowerCase() === normalized) return value;
+      if (key.toLowerCase() === normalizedWithoutUnderscore) return value;
     }
 
     return undefined;
@@ -342,6 +344,7 @@ export class Viewer {
 
     switch (condition.operator) {
       case "exists":
+      case "notEmpty":
         return rawValue !== null && String(rawValue).trim().length > 0;
       case "equals":
         return String(rawValue ?? "") === String(condition.value ?? "");
@@ -392,10 +395,16 @@ export class Viewer {
 
     for (const rule of definition.rules) {
       ruleStats.set(rule.id, { ruleName: rule.name, checked: 0, failed: 0 });
+
+      const targetClass = rule.target?.ifcClass ? this.normalizeIfcClassName(rule.target.ifcClass) : undefined;
+
       for (const modelId of this.fragments.list.keys()) {
         if (rule.target?.modelId && rule.target.modelId !== modelId) continue;
 
-        const idsByModel = await this.getModelIdMap(modelId);
+        const idsByModel = targetClass
+          ? await this.getClassIdMap(modelId, targetClass)
+          : await this.getModelIdMap(modelId);
+
         const localIdsSet = idsByModel[modelId] ?? new Set<number>();
         const model = this.fragments.list.get(modelId);
         if (!model) continue;
@@ -407,7 +416,8 @@ export class Viewer {
             const rawLocalId = this.getValue(item._localId);
             const localId = Number(rawLocalId);
             if (Number.isNaN(localId)) continue;
-            if (!this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
+
+            if (!targetClass && !this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
 
             const elementKey = `${modelId}:${localId}`;
             checkedByElement.add(elementKey);
