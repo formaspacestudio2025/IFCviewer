@@ -273,6 +273,17 @@ export class Viewer {
     return this.classifier.find({ Models: [modelId], "IFC Classes": [className] });
   }
 
+  private resolveClassifierClassName(targetClass: string): string {
+    const classGroups = this.classifier.list.get("IFC Classes");
+    if (!classGroups) return targetClass;
+
+    for (const [className] of classGroups) {
+      if (this.normalizeIfcClassName(className) === targetClass) return className;
+    }
+
+    return targetClass;
+  }
+
   private async getPropertyGroupIdMap(modelId: string, propertyKey: string, groupName: string) {
     return this.classifier.find({
       Models: [modelId],
@@ -416,11 +427,16 @@ export class Viewer {
       for (const modelId of this.fragments.list.keys()) {
         if (rule.target?.modelId && rule.target.modelId !== modelId) continue;
 
+        let usedClassifierClassFilter = false;
         let idsByModel = targetClass
-          ? await this.getClassIdMap(modelId, targetClass)
+          ? await this.getClassIdMap(modelId, this.resolveClassifierClassName(targetClass))
           : await this.getModelIdMap(modelId);
 
         let localIdsSet = idsByModel[modelId] ?? new Set<number>();
+
+        if (targetClass && localIdsSet.size > 0) {
+          usedClassifierClassFilter = true;
+        }
 
         // Fallback: some models/classifications don't expose the expected IFC class bucket key
         // (e.g. class naming variations), which would otherwise produce checked=0.
@@ -440,7 +456,7 @@ export class Viewer {
             const localId = Number(rawLocalId);
             if (Number.isNaN(localId)) continue;
 
-            if (!this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
+            if (!usedClassifierClassFilter && !this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
 
             const elementKey = `${modelId}:${localId}`;
             checkedByElement.add(elementKey);
