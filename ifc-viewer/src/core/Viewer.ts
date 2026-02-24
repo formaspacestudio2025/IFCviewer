@@ -273,15 +273,15 @@ export class Viewer {
     return this.classifier.find({ Models: [modelId], "IFC Classes": [className] });
   }
 
-  private resolveClassifierClassName(targetClass: string): string {
+  private resolveClassifierClassName(targetClass: string): string | null {
     const classGroups = this.classifier.list.get("IFC Classes");
-    if (!classGroups) return targetClass;
+    if (!classGroups) return null;
 
     for (const [className] of classGroups) {
       if (this.normalizeIfcClassName(className) === targetClass) return className;
     }
 
-    return targetClass;
+    return null;
   }
 
   private async getPropertyGroupIdMap(modelId: string, propertyKey: string, groupName: string) {
@@ -427,16 +427,16 @@ export class Viewer {
       for (const modelId of this.fragments.list.keys()) {
         if (rule.target?.modelId && rule.target.modelId !== modelId) continue;
 
-        let idsByModel = targetClass
-          ? await this.getClassIdMap(modelId, this.resolveClassifierClassName(targetClass))
+        const classifierClassName = targetClass ? this.resolveClassifierClassName(targetClass) : null;
+
+        let idsByModel = classifierClassName
+          ? await this.getClassIdMap(modelId, classifierClassName)
           : await this.getModelIdMap(modelId);
 
         let localIdsSet = idsByModel[modelId] ?? new Set<number>();
 
-
-        // Fallback: some models/classifications don't expose the expected IFC class bucket key
-        // (e.g. class naming variations), which would otherwise produce checked=0.
-        // In that case, evaluate all model elements and keep strict per-item class matching below.
+        // Fallback: if class lookup returns no IDs (or no classifier class key matched),
+        // evaluate all model elements and keep strict per-item class matching below.
         if (targetClass && localIdsSet.size === 0) {
           idsByModel = await this.getModelIdMap(modelId);
           localIdsSet = idsByModel[modelId] ?? new Set<number>();
