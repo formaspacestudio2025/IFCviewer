@@ -300,6 +300,7 @@ export class Viewer {
       globalid: ["GlobalId", "globalId", "GUID"],
       ifcclass: ["EntityName", "entityName", "Class"],
       classname: ["EntityName", "entityName", "Class"],
+      "class": ["EntityName", "entityName", "ifcClass"],
       class: ["EntityName", "entityName", "ifcClass"],
     };
 
@@ -393,6 +394,11 @@ export class Viewer {
 
     for (const rule of definition.rules) {
       ruleStats.set(rule.id, { ruleName: rule.name, checked: 0, failed: 0 });
+      for (const modelId of this.fragments.list.keys()) {
+        if (rule.target?.modelId && rule.target.modelId !== modelId) continue;
+
+        const idsByModel = await this.getModelIdMap(modelId);
+        const localIdsSet = idsByModel[modelId] ?? new Set<number>();
       const filter: Record<string, string[]> = {};
       if (rule.target?.modelId) filter.Models = [rule.target.modelId];
 
