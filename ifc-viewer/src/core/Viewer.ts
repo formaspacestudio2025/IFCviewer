@@ -292,6 +292,52 @@ export class Viewer {
     return String(raw);
   }
 
+  private getItemPropertyRaw(item: Record<string, any>, propertyName: string): any {
+    if (propertyName in item) return item[propertyName];
+
+    const aliases: Record<string, string[]> = {
+      guid: ["GlobalId", "globalId", "GUID"],
+      globalid: ["GlobalId", "globalId", "GUID"],
+      ifcclass: ["EntityName", "entityName", "Class"],
+      classname: ["EntityName", "entityName", "Class"],
+      class: ["EntityName", "entityName", "ifcClass"],
+    };
+
+    const normalized = propertyName.trim().toLowerCase();
+    for (const alias of aliases[normalized] ?? []) {
+      if (alias in item) return item[alias];
+    }
+
+    const lowerName = normalized;
+    for (const [key, value] of Object.entries(item)) {
+      if (key.toLowerCase() === lowerName) return value;
+    }
+
+    return undefined;
+  }
+
+  private getItemIfcClass(item: Record<string, any>): string {
+    const rawClass = this.getItemPropertyRaw(item, "ifcClass");
+    return String(this.getValue(rawClass) ?? "").trim().toUpperCase();
+  }
+
+  private normalizeIfcClassName(value: string): string {
+    const normalized = value.trim().toUpperCase();
+    if (!normalized) return "";
+    return normalized.startsWith("IFC") ? normalized : `IFC${normalized}`;
+  }
+
+  private isRuleTargetClassMatch(item: Record<string, any>, targetIfcClass?: string): boolean {
+    if (!targetIfcClass) return true;
+    const elementClass = this.getItemIfcClass(item);
+    if (!elementClass) return false;
+
+    const target = this.normalizeIfcClassName(targetIfcClass);
+    return elementClass === target;
+  }
+
+  private evaluateCondition(item: Record<string, any>, condition: ComplianceCondition): boolean {
+    const rawValue = this.getValue(this.getItemPropertyRaw(item, condition.property));
   private evaluateCondition(item: Record<string, any>, condition: ComplianceCondition): boolean {
     const rawValue = this.getValue(item[condition.property]);
 
@@ -349,6 +395,12 @@ export class Viewer {
       ruleStats.set(rule.id, { ruleName: rule.name, checked: 0, failed: 0 });
       const filter: Record<string, string[]> = {};
       if (rule.target?.modelId) filter.Models = [rule.target.modelId];
+
+      const idsByModel = Object.keys(filter).length
+        ? await this.classifier.find(filter)
+        : Object.fromEntries(
+            [...this.fragments.list.keys()].map((modelId) => [modelId, this.classifier.list.get("Models")?.get(modelId) ?? new Set<number>()])
+          );
       if (rule.target?.ifcClass) filter["IFC Classes"] = [rule.target.ifcClass];
 
       const idsByModel = Object.keys(filter).length ? await this.classifier.find(filter) : await this.classifier.find({ Models: [/.*/ as any] });
@@ -364,6 +416,7 @@ export class Viewer {
             const rawLocalId = this.getValue(item._localId);
             const localId = Number(rawLocalId);
             if (Number.isNaN(localId)) continue;
+            if (!this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
 
             const elementKey = `${modelId}:${localId}`;
             checkedByElement.add(elementKey);
