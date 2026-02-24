@@ -434,12 +434,14 @@ export class Viewer {
           : await this.getModelIdMap(modelId);
 
         let localIdsSet = idsByModel[modelId] ?? new Set<number>();
+        let usedClassifierFilteredIds = Boolean(targetClass && classifierClassName && localIdsSet.size > 0);
 
         // Fallback: if class lookup returns no IDs (or no classifier class key matched),
         // evaluate all model elements and keep strict per-item class matching below.
         if (targetClass && localIdsSet.size === 0) {
           idsByModel = await this.getModelIdMap(modelId);
           localIdsSet = idsByModel[modelId] ?? new Set<number>();
+          usedClassifierFilteredIds = false;
         }
         const model = this.fragments.list.get(modelId);
         if (!model) continue;
@@ -452,7 +454,11 @@ export class Viewer {
             const localId = Number(rawLocalId);
             if (Number.isNaN(localId)) continue;
 
-            if (!this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) continue;
+            if (!this.isRuleTargetClassMatch(item, rule.target?.ifcClass)) {
+              // If IDs came from classifier class filtering, allow items only when class metadata
+              // is missing on the item payload; explicit mismatches are still rejected.
+              if (!usedClassifierFilteredIds || this.getItemIfcClass(item)) continue;
+            }
 
             const elementKey = `${modelId}:${localId}`;
             checkedByElement.add(elementKey);
